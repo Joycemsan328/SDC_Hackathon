@@ -1,0 +1,71 @@
+Create a modern, elegant, and fully functional website called "EventFlow AI".
+
+EventFlow AI is an AI-powered event planning platform for small event management companies. It will have two user roles: Customer and Business Staff.
+
+For now, ONLY develop the CUSTOMER PORTAL. The Business Portal will be developed later by my teammates in the same project.
+
+TECHNOLOGY:
+- React, TypeScript, Tailwind CSS
+- Clean, reusable components
+- Responsive desktop and mobile design
+- Use Malaysian Ringgit (RM) for all prices
+
+DESIGN STYLE:
+- Modern, elegant and minimal
+- White and soft blush pink color palette with lavender accents
+- Rounded cards, subtle shadows and clean typography
+- Professional event planning website
+- Avoid cluttered layouts
+
+CUSTOMER PORTAL PAGES:
+
+1. LOGIN / SIGN UP
+- Email and password fields
+- Login and Register buttons
+- Include a demo customer login
+- For now, do not implement real authentication
+
+2. CUSTOMER DASHBOARD
+- Welcome message
+- Create New Event button
+- My Events section
+- Recent event requests and statuses
+
+3. CREATE EVENT
+Allow customers to enter:
+- Event Name
+- Event Type: Birthday, Wedding, Corporate Event, Other
+- Event Date
+- Event Location
+- Number of Guests
+- Budget (RM)
+- Event Theme
+- Required Services: Catering, Decoration, Photography, Venue Setup, Equipment
+- Additional Requirements
+- Submit Event button
+Validate required inputs.
+
+4. MY EVENTS
+- List all events created by the demo customer
+- Show event name, date, budget, and status
+- New events should show Pending Review
+- Include View Details button
+
+5. VIEW EVENT / PROPOSAL
+- Show the customer's submitted requirements
+- Show a sample event proposal and quotation only when its status is approved and ready for the customer
+- Show event service breakdown and total estimated cost
+- Include Accept Proposal and Request Changes buttons
+- Customers can submit change requests
+- Change requests should not overwrite an already approved quotation
+
+FUNCTIONAL REQUIREMENTS:
+- All navigation and buttons must work
+- Save demo event data using browser localStorage for now
+- Use fictional sample event data
+- Organize customer components inside src/customer
+- Reserve space for a future Business Portal and shared backend
+- Do not implement WhatsApp, Google Sheets, real AI APIs or payments yet
+- Do not expose internal supplier costs to customer accounts
+
+Please build the working application and launch the preview.
