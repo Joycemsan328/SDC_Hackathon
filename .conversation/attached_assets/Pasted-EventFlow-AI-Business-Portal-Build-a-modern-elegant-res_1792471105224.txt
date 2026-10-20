@@ -1,0 +1,238 @@
+EventFlow AI - Business Portal
+
+Build a modern, elegant, responsive Business Management Portal for EventFlow AI, an AI-powered event planning platform.
+
+Tech Stack
+React + TypeScript
+Tailwind CSS
+Component-based architecture
+Responsive desktop/tablet/mobile design
+Store demo data using localStorage
+Use Malaysian Ringgit (RM)
+Design Style
+Luxury SaaS dashboard
+White background with soft blush pink and lavender accents
+Rounded cards and subtle shadows
+Elegant, professional event-planning aesthetic
+Clean and modern UI similar to wedding/event management platforms
+Business Pages
+1. Dashboard
+
+Display:
+
+New Requests
+Pending Proposals
+Pending Approval
+Active Events
+
+Include:
+
+Recent Customer Requests
+Today's Tasks
+Quick Actions
+Search bar
+Notifications
+Profile section
+2. Customer Requests
+
+View customer event requests.
+
+Table columns:
+
+Request ID
+Customer Name
+Event Type
+Event Date
+Guests
+Budget
+Theme
+Status
+Action
+
+Request Details:
+
+Customer info
+Event details
+Services requested
+Additional notes
+
+Actions:
+
+View Request
+Request More Information
+Generate AI Proposal
+3. AI Proposal Generation
+
+Generate quotations based on customer requests.
+
+Show:
+
+Customer requirements
+Event details
+Moodboard images
+Proposal breakdown
+
+Quotation table:
+
+Service
+Quantity
+Unit Price
+Total
+
+Display total quotation amount prominently.
+
+Actions:
+
+Regenerate Proposal
+Edit Proposal
+Submit For Approval
+
+Include AI recommendation section.
+
+4. Proposal Approval
+
+Review quotations before sending to customers.
+
+Display:
+
+Customer details
+Event details
+Quotation breakdown
+Total amount
+
+Approval checklist:
+
+Budget verified
+Supplier available
+Schedule conflict checked
+Proposal reviewed
+
+Actions:
+
+Request Revision
+Approve & Send To Customer
+5. Event Management
+
+Manage all approved events.
+
+Table columns:
+
+Event ID
+Customer
+Event Name
+Event Date
+Event Time
+Status
+Total Value
+
+Statuses:
+
+Upcoming
+Ongoing
+Completed
+Cancelled
+
+Include detailed event view.
+
+6. Calendar & Availability
+
+Manage bookings and prevent double booking.
+
+Calendar views:
+
+Monthly
+Weekly
+Daily
+
+Colour coding:
+
+Green = Available
+Yellow = Reserved
+Red = Confirmed Booking
+Blue = Completed
+
+Business rule: When a proposal is accepted and confirmed, automatically block that date and time slot from future bookings.
+
+7. Supplier Management
+
+Manage supplier catalogue.
+
+Categories:
+
+Catering
+Decoration
+Photography
+Entertainment
+Equipment
+Transport
+
+Table columns:
+
+Supplier Name
+Package Name
+Category
+Price (RM)
+Status
+
+Actions:
+
+Add Supplier
+Edit Supplier
+View Details
+8. Reports & Analytics
+
+Dashboard showing:
+
+Total Requests
+Total Revenue
+Approved Events
+Proposal Acceptance Rate
+
+Charts:
+
+Monthly Requests
+Revenue Trend
+Event Type Distribution
+Proposal Acceptance Rate
+Demo Data
+
+Generate realistic sample data for:
+
+Weddings
+Birthday Parties
+Corporate Events
+Engagements
+Baby Full Moon celebrations
+
+Budget range:
+
+RM3,000 to RM50,000
+
+Statuses:
+
+New
+Under Review
+Proposal Ready
+Pending Approval
+Approved
+Completed
+Future Placeholders
+
+Create placeholders for:
+
+AI Proposal Engine
+Business Authentication
+Shared Backend
+Email Notifications
+Payment Integration
+Supplier API
+Calendar Sync
+Requirements
+All pages linked through working navigation
+Reusable React components
+Professional SaaS-quality UI
+Clean folder structure under /src/business
+LocalStorage persistence
+Ready for future integration with the Customer Portal
+
+Build and launch the preview automatically.
