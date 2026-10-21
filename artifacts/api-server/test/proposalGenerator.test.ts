@@ -46,7 +46,7 @@ test("validates both plans and their itemized MYR totals", () => {
   assert.equal(GeneratedProposalSchema.safeParse({ ...proposal, plans: [proposal.plans[1], proposal.plans[0]] }).success, false);
 });
 
-test("submits customer requirements, polls the queue job, and parses the vLLM text completion shape", async () => {
+test("submits concise chat-completion input, disables Qwen thinking, and parses the chat response", async () => {
   const calls: { url: string; init?: RequestInit }[] = [];
   const fetchImpl = async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
@@ -55,7 +55,7 @@ test("submits customer requirements, polls the queue job, and parses the vLLM te
     return fakeResponse({
       id: "job-123",
       status: "COMPLETED",
-      output: [{ choices: [{ finish_reason: "stop", index: 0, text: JSON.stringify(proposal) }] }],
+      output: { choices: [{ finish_reason: "stop", index: 0, message: { role: "assistant", content: JSON.stringify(proposal) } }] },
     });
   };
   const generator = new ProposalGenerator(dependencies(fetchImpl));
@@ -66,18 +66,45 @@ test("submits customer requirements, polls the queue job, and parses the vLLM te
   assert.equal(calls[0]?.url, "https://api.runpod.ai/v2/test-endpoint/run");
   assert.equal(calls[1]?.url, "https://api.runpod.ai/v2/test-endpoint/status/job-123");
   assert.equal(new Headers(calls[0]?.init?.headers).get("authorization"), "Bearer test-key-never-returned");
-  const sent = JSON.parse(String(calls[0]?.init?.body)) as { input: { prompt: string; sampling_params: { max_tokens: number } } };
-  assert.match(sent.input.prompt, /A relaxed dinner/);
-  assert.match(sent.input.prompt, /Qwen\/Qwen3-8B/);
-  assert.equal(sent.input.sampling_params.max_tokens, 4096);
+  const sent = JSON.parse(String(calls[0]?.init?.body)) as {
+    input: {
+      route: string;
+      method: string;
+      body: {
+        model: string;
+        messages: Array<{ role: string; content: string }>;
+        max_tokens: number;
+        n: number;
+        chat_template_kwargs: { enable_thinking: boolean };
+      };
+    };
+  };
+  assert.equal(sent.input.route, "/v1/chat/completions");
+  assert.equal(sent.input.method, "POST");
+  assert.match(sent.input.body.messages[1]?.content ?? "", /A relaxed dinner/);
+  assert.equal(sent.input.body.model, "Qwen/Qwen3-8B");
+  assert.equal(sent.input.body.max_tokens, 2_048);
+  assert.equal(sent.input.body.n, 1);
+  assert.equal(sent.input.body.chat_template_kwargs.enable_thinking, false);
+  assert.ok((sent.input.body.messages[0]?.content.length ?? Infinity) < 1_200);
   assert.equal(JSON.stringify(result).includes("test-key-never-returned"), false);
+});
+
+test("continues to parse the RunPod text-completion response format", async () => {
+  const fetchImpl = async () => fakeResponse({
+    id: "job-text-completion",
+    status: "COMPLETED",
+    output: [{ choices: [{ finish_reason: "stop", text: JSON.stringify(proposal) }] }],
+  });
+  const generator = new ProposalGenerator(dependencies(fetchImpl));
+  assert.deepEqual(await generator.generate(request), proposal);
 });
 
 test("rejects a vLLM completion marked as truncated", async () => {
   const fetchImpl = async () => fakeResponse({
     id: "job-truncated",
     status: "COMPLETED",
-    output: [{ choices: [{ finish_reason: "length", text: "partial response" }] }],
+    output: { choices: [{ finish_reason: "length", message: { role: "assistant", content: "partial response" } }] },
   });
   const generator = new ProposalGenerator(dependencies(fetchImpl));
   await assert.rejects(generator.generate(request), (error: unknown) => {
