@@ -7,6 +7,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/not-found";
 import CalendarManagementPage from "@/components/calendar-management";
+import EventFlowRegister from "./EventFlowRegister";
 import {
   Route,
   Switch,
@@ -412,6 +413,11 @@ const nav = [
   { href: "/calendar", label: "Availability", icon: CalendarDays },
   { href: "/suppliers", label: "Suppliers", icon: Package },
   { href: "/reports", label: "Reports", icon: ChartNoAxesCombined },
+  {
+    href: "/admin-approvals",
+    label: "Admin Approvals",
+    icon: ClipboardCheck,
+  },
 ];
 const money = (n: number) => `RM ${n.toLocaleString("en-MY")}`;
 const dateLabel = (
@@ -487,6 +493,7 @@ function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [isStaff, setIsStaff] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -494,12 +501,22 @@ function App() {
     async function checkStaff(userId: string) {
       const { data, error } = await supabase
         .from("profiles")
-        .select("role")
+        .select("role, account_type, approval_status")
         .eq("id", userId)
         .single();
 
       if (active) {
-        setIsStaff(!error && data?.role === "staff");
+        const approved = !error && data?.approval_status === "approved";
+
+        const staffAccess =
+          approved &&
+          data?.role === "staff" &&
+          data?.account_type === "business";
+
+        const adminAccess = approved && data?.role === "admin";
+
+        setIsStaff(staffAccess || adminAccess);
+        setIsAdmin(adminAccess);
         setAuthLoading(false);
       }
     }
@@ -513,6 +530,7 @@ function App() {
         checkStaff(data.session.user.id);
       } else {
         setIsStaff(false);
+        setIsAdmin(false);
         setAuthLoading(false);
       }
     });
@@ -788,7 +806,7 @@ function App() {
   }
 
   if (!session) {
-    return <StaffLogin />;
+    return <EventFlowWelcome />;
   }
 
   if (!isStaff) {
@@ -902,6 +920,20 @@ function App() {
                 >
                   <RotateCcw size={14} /> Reset demo data
                 </button>
+
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const { error } = await supabase.auth.signOut();
+                    if (error) {
+                      alert("Unable to log out: " + error.message);
+                    }
+                  }}
+                  className="flex w-full items-center rounded-xl px-3 py-2 text-left text-[11px] font-medium text-[#998fa0] hover:bg-white hover:text-[#6d4d7e]"
+                >
+                  Log Out
+                </button>
+
                 <div className="mt-3 flex items-center gap-3 border-t border-[#e8e0e9] px-2 pt-4">
                   <div className="grid h-9 w-9 place-items-center rounded-full bg-[#e9d6e8] text-[12px] font-bold text-[#714981]">
                     EC
@@ -3992,6 +4024,56 @@ function StaffLogin() {
           {loading ? "Signing in..." : "Sign In"}
         </button>
       </form>
+    </div>
+  );
+}
+
+function EventFlowWelcome() {
+  const [selectedRole, setSelectedRole] = useState<
+    "customer" | "business" | null
+  >(null);
+
+  if (selectedRole === "business") {
+    return (
+      <EventFlowRegister
+        accountType="business"
+        onBack={() => setSelectedRole(null)}
+      />
+    );
+  }
+
+  if (selectedRole === "customer") {
+    return (
+      <EventFlowRegister
+        accountType="customer"
+        onBack={() => setSelectedRole(null)}
+      />
+    );
+  }
+
+  return (
+    <div className="flex min-h-screen flex-col items-center justify-center gap-6 p-6">
+      <h1 className="text-4xl font-bold">Welcome to EventFlow</h1>
+
+      <p className="text-gray-500">
+        Choose how you would like to use EventFlow.
+      </p>
+
+      <div className="flex flex-wrap justify-center gap-4">
+        <button
+          onClick={() => setSelectedRole("customer")}
+          className="rounded-xl border p-8 hover:bg-gray-100 hover:text-gray-900"
+        >
+          Customer
+        </button>
+
+        <button
+          onClick={() => setSelectedRole("business")}
+          className="rounded-xl border p-8 hover:bg-gray-100 hover:text-gray-900"
+        >
+          Business
+        </button>
+      </div>
     </div>
   );
 }
