@@ -34,11 +34,62 @@ export interface ProposalService { generate(input: ProposalGenerationInput): Pro
 export const mockProposalService: ProposalService = {
   async generate() { throw new Error("Proposal generation is currently represented by labeled mock data."); },
 };
+type GeneratedProposalResponse = {
+  recommendation: string;
+  plans: [{
+    id: "A" | "B"; title: string; concept: string; theme: string;
+    timeline: { time: string; activity: string }[]; venue: { name: string; setup: string };
+    catering: string; services: string[];
+    costBreakdown: { item: string; description: string; amountMYR: number }[];
+    totalEstimatedMYR: number; assumptions: string[]; unconfirmedCosts: string[];
+  }, { id: "A" | "B"; title: string; concept: string; theme: string;
+    timeline: { time: string; activity: string }[]; venue: { name: string; setup: string };
+    catering: string; services: string[];
+    costBreakdown: { item: string; description: string; amountMYR: number }[];
+    totalEstimatedMYR: number; assumptions: string[]; unconfirmedCosts: string[];
+  }];
+};
+export const apiProposalService: ProposalService = {
+  async generate(input) {
+    const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/+$/, "") ?? "";
+    const response = await fetch(`${apiBaseUrl}/api/proposals/generate`, {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "application/json" },
+      body: JSON.stringify({
+        eventName: input.name, eventType: input.type, eventDate: input.date,
+        location: input.location, guestCount: input.guests, budgetMYR: input.budget,
+        theme: input.theme, selectedServices: input.services,
+        requirements: input.requirements.trim() || "No additional requirements provided.",
+      }),
+    });
+    const result = await response.json().catch(() => null) as { proposal?: GeneratedProposalResponse; error?: string } | null;
+    if (!response.ok || !result?.proposal) {
+      throw new Error(result?.error || "We couldn’t generate your proposal. Please try again.");
+    }
+    const plans = result.proposal.plans.map((plan): EventPlan => ({
+      id: plan.id,
+      title: plan.title,
+      concept: plan.concept,
+      theme: plan.theme,
+      timeline: plan.timeline,
+      venue: plan.venue,
+      catering: plan.catering,
+      services: plan.services,
+      costs: plan.costBreakdown.map((item) => ({ name: item.item, detail: item.description, price: item.amountMYR, confirmed: false })),
+      total: plan.totalEstimatedMYR,
+      recommendation: result.proposal!.recommendation,
+      assumptions: plan.assumptions,
+      unconfirmedCosts: plan.unconfirmedCosts,
+    })) as [EventPlan, EventPlan];
+    return { plans, updatedAt: new Date().toISOString(), source: "ai-service" };
+  },
+};
 type CustomerState = {
   user: { name: string; email: string } | null; events: CustomerEvent[]; changeRequests: ChangeRequest[];
   signIn: (email: string, password: string, registering?: boolean) => string | null;
   signOut: () => void;
   addEvent: (event: Omit<CustomerEvent, "id" | "createdAt" | "status" | "proposal" | "acceptedPlanId">) => string;
+  generateProposal: (id: string, input: ProposalGenerationInput) => Promise<void>;
   acceptProposal: (id: string, planId: "A" | "B") => void;
   requestChanges: (id: string, message: string) => void;
 };
@@ -98,6 +149,12 @@ export function CustomerProvider({ children }: { children: ReactNode }) {
     },
     signOut: () => setState((current) => ({ ...current, user: null })),
     addEvent: (event) => { const id = `evt-${Date.now().toString(36)}`; setState((current) => ({ ...current, events: [{ ...event, id, createdAt: new Date().toISOString(), status: "AI Draft" }, ...current.events] })); return id; },
+    generateProposal: async (id, input) => {
+      const existing = state.events.find((item) => item.id === id);
+      if (existing?.proposal) return;
+      const proposal = await apiProposalService.generate(input);
+      setState((current) => ({ ...current, events: current.events.map((item) => item.id === id && item.status === "AI Draft" ? { ...item, proposal } : item) }));
+    },
     acceptProposal: (id, planId) => setState((current) => ({ ...current, events: current.events.map((event) => event.id === id && event.status === "Approved for Customer" && event.proposal?.plans.some((plan) => plan.id === planId) ? { ...event, status: "Customer Accepted", acceptedPlanId: planId } : event) })),
     requestChanges: (id, message) => setState((current) => {
       const event = current.events.find((item) => item.id === id); const trimmed = message.trim();
