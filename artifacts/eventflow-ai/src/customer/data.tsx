@@ -30,7 +30,7 @@ export type ChangeRequest = { id: string; eventId: string; message: string; crea
 export type ProposalGenerationInput = Pick<CustomerEvent, "name" | "type" | "date" | "location" | "guests" | "budget" | "theme" | "services" | "requirements">;
 // Replace this mock implementation with a server-backed provider when available.
 // No external AI service is connected by this interface yet.
-export interface ProposalService { generate(input: ProposalGenerationInput): Promise<EventProposal> }
+export interface ProposalService { generate(input: ProposalGenerationInput, idempotencyKey?: string): Promise<EventProposal> }
 export const mockProposalService: ProposalService = {
   async generate() { throw new Error("Proposal generation is currently represented by labeled mock data."); },
 };
@@ -50,11 +50,11 @@ type GeneratedProposalResponse = {
   }];
 };
 export const apiProposalService: ProposalService = {
-  async generate(input) {
+  async generate(input, idempotencyKey) {
     const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/+$/, "") ?? "";
-    const response = await fetch(`${apiBaseUrl}/api/proposals/generate`, {
+    const response = await fetch(`${apiBaseUrl}/api/dev/proposals/generate`, {
       method: "POST",
-      headers: { "content-type": "application/json", accept: "application/json" },
+      headers: { "content-type": "application/json", accept: "application/json", "idempotency-key": (idempotencyKey || `evt-${Date.now()}`).replace(/[^a-zA-Z0-9_-]/g, "-").slice(0, 128) },
       body: JSON.stringify({
         eventName: input.name, eventType: input.type, eventDate: input.date,
         location: input.location, guestCount: input.guests, budgetMYR: input.budget,
@@ -152,7 +152,7 @@ export function CustomerProvider({ children }: { children: ReactNode }) {
     generateProposal: async (id, input) => {
       const existing = state.events.find((item) => item.id === id);
       if (existing?.proposal) return;
-      const proposal = await apiProposalService.generate(input);
+      const proposal = await apiProposalService.generate(input, id);
       setState((current) => ({ ...current, events: current.events.map((item) => item.id === id && item.status === "AI Draft" ? { ...item, proposal } : item) }));
     },
     acceptProposal: (id, planId) => setState((current) => ({ ...current, events: current.events.map((event) => event.id === id && event.status === "Approved for Customer" && event.proposal?.plans.some((plan) => plan.id === planId) ? { ...event, status: "Customer Accepted", acceptedPlanId: planId } : event) })),

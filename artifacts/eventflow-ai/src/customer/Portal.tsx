@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ButtonHTMLAttributes, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ButtonHTMLAttributes, type FormEvent, type ReactNode } from 'react';
 import { Link, Route, Switch, useLocation } from 'wouter';
 import {
   ArrowLeft, ArrowRight, CalendarDays, Check, CheckCircle2, CircleHelp, ClipboardList,
@@ -138,9 +138,12 @@ function CreateEvent() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [createdEventId, setCreatedEventId] = useState<string | null>(null);
   const [retryInput, setRetryInput] = useState<Omit<CustomerEvent, "id" | "createdAt" | "status" | "proposal" | "acceptedPlanId"> | null>(null);
+  const submissionLock = useRef(false);
   const [selected, setSelected] = useState<Service[]>([]);
   const toggle = (service: Service) => setSelected((current) => current.includes(service) ? current.filter((item) => item !== service) : [...current, service]);
   const generate = async (id: string, input: Omit<CustomerEvent, "id" | "createdAt" | "status" | "proposal" | "acceptedPlanId">) => {
+    if (submissionLock.current) return;
+    submissionLock.current = true;
     setIsGenerating(true);
     setError('');
     try {
@@ -150,6 +153,7 @@ function CreateEvent() {
     } catch (generationError) {
       setError(generationError instanceof Error ? generationError.message : 'We couldn’t generate your plans. Please try again.');
     } finally {
+      submissionLock.current = false;
       setIsGenerating(false);
     }
   };
@@ -171,7 +175,7 @@ function CreateEvent() {
     setRetryInput(eventInput);
     void generate(id, eventInput);
   };
-  if (submitted) return <div className="ef-enter mx-auto max-w-xl py-12 text-center"><div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-[22px] bg-[#e9f3ed] text-[#62836b]"><CheckCircle2 size={32} /></div><h1 className="text-3xl font-extrabold text-[#4d4352]">Your idea is with us.</h1><p className="mx-auto mt-3 max-w-md text-sm leading-relaxed text-[#8a808e]">Your request is now marked <strong className="text-[#6c5d70]">AI Draft</strong>. Our planning team will take a look and prepare a thoughtful next step.</p><p className="mt-5 text-xs font-semibold text-[#aa7893]">Opening your request details…</p></div>;
+  if (submitted) return <div className="ef-enter mx-auto max-w-xl py-12 text-center"><div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-[22px] bg-[#e9f3ed] text-[#62836b]"><CheckCircle2 size={32} /></div><h1 className="text-3xl font-extrabold text-[#4d4352]">Your idea is with us.</h1><p className="mx-auto mt-3 max-w-md text-sm leading-relaxed text-[#8a808e]">Your request is saved with an <strong className="text-[#6c5d70]">Unapproved AI Draft — Demo Only</strong>. It is not approved for acceptance.</p><p className="mt-5 text-xs font-semibold text-[#aa7893]">Opening your request details…</p></div>;
   return <div className="ef-enter">
     <button onClick={() => setLocation('/events')} className="mb-5 inline-flex items-center gap-2 text-xs font-bold text-[#8c7d8e] hover:text-[#9c5f7d]" data-testid="button-back-events"><ArrowLeft size={15} />Back to my events</button>
     <PageTitle eyebrow="A new occasion" title="Let’s plan something lovely." description="Share a few details to help your planner understand what you have in mind." />
@@ -239,7 +243,7 @@ function EventDetail({ id }: { id?: string }) {
           </form>}
         </DetailSection>}
         {canViewProposal && event.proposal && <DetailSection icon={<Sparkles size={17} />} title={isAiDraft ? 'Compare your AI draft plans' : 'Compare your approved plans'}>
-          <div className={`mb-4 rounded-xl px-4 py-3 text-xs leading-relaxed ${isAiDraft ? 'border border-[#e6d9ef] bg-[#f7f2fa] text-[#705d7f]' : 'bg-[#f7eff4] text-[#7e6c80]'}`} data-testid={isAiDraft ? 'status-ai-draft-not-approved' : 'status-approved-proposal'}>{isAiDraft ? <><strong>AI Draft — Not Business Approved.</strong> These sample plans are for development/demo review only and cannot be accepted until the planning team approves them.</> : 'These options have business approval and are ready for you. Both are estimates; review the assumptions and unconfirmed costs before choosing.'}</div>
+          <div className={`mb-4 rounded-xl px-4 py-3 text-xs leading-relaxed ${isAiDraft ? 'border border-[#e6d9ef] bg-[#f7f2fa] text-[#705d7f]' : 'bg-[#f7eff4] text-[#7e6c80]'}`} data-testid={isAiDraft ? 'status-ai-draft-not-approved' : 'status-approved-proposal'}>{isAiDraft ? <><strong>Unapproved AI Draft — Demo Only.</strong> These AI-generated plans are for development/demo review only and cannot be accepted until the planning team approves them.</> : 'These options have business approval and are ready for you. Both are estimates; review the assumptions and unconfirmed costs before choosing.'}</div>
           <div className="grid gap-4 xl:grid-cols-2">{event.proposal.plans.map((plan) => {
             const overBudget = plan.total - event.budget;
             const accepted = event.acceptedPlanId === plan.id;
