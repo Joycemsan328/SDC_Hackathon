@@ -858,39 +858,41 @@ function App() {
                 Workspace
               </div>
               <nav className="space-y-1" aria-label="Main navigation">
-                {nav.map((item) => {
-                  const active =
-                    item.href === "/"
-                      ? location === "/"
-                      : location.startsWith(item.href);
-                  const Icon = item.icon;
-                  const badge =
-                    item.href === "/approvals"
-                      ? store.proposals.filter(
-                          (p) => p.status === "Pending Approval",
-                        ).length
-                      : item.href === "/requests"
-                        ? store.requests.filter((r) => r.status === "New")
-                            .length
-                        : 0;
-                  return (
-                    <Link
-                      key={item.href}
-                      href={item.href}
-                      onClick={() => setMobileNav(false)}
-                      data-testid={`link-nav-${item.label.toLowerCase()}`}
-                      className={`sidebar-link flex items-center gap-3 rounded-xl px-3 py-[10px] text-[13px] font-semibold ${active ? "bg-white text-[#714981] shadow-sm" : "text-[#756d7b] hover:bg-white/70 hover:text-[#493b52]"}`}
-                    >
-                      <Icon size={17} strokeWidth={1.8} />
-                      <span className="flex-1">{item.label}</span>
-                      {badge > 0 && (
-                        <span className="grid h-5 min-w-5 place-items-center rounded-full bg-[#f4dce9] px-1 text-[10px] font-bold text-[#9a5b7a]">
-                          {badge}
-                        </span>
-                      )}
-                    </Link>
-                  );
-                })}
+                {nav
+                  .filter((item) => isAdmin || item.href !== "/admin-approvals")
+                  .map((item) => {
+                    const active =
+                      item.href === "/"
+                        ? location === "/"
+                        : location.startsWith(item.href);
+                    const Icon = item.icon;
+                    const badge =
+                      item.href === "/approvals"
+                        ? store.proposals.filter(
+                            (p) => p.status === "Pending Approval",
+                          ).length
+                        : item.href === "/requests"
+                          ? store.requests.filter((r) => r.status === "New")
+                              .length
+                          : 0;
+                    return (
+                      <Link
+                        key={item.href}
+                        href={item.href}
+                        onClick={() => setMobileNav(false)}
+                        data-testid={`link-nav-${item.label.toLowerCase()}`}
+                        className={`sidebar-link flex items-center gap-3 rounded-xl px-3 py-[10px] text-[13px] font-semibold ${active ? "bg-white text-[#714981] shadow-sm" : "text-[#756d7b] hover:bg-white/70 hover:text-[#493b52]"}`}
+                      >
+                        <Icon size={17} strokeWidth={1.8} />
+                        <span className="flex-1">{item.label}</span>
+                        {badge > 0 && (
+                          <span className="grid h-5 min-w-5 place-items-center rounded-full bg-[#f4dce9] px-1 text-[10px] font-bold text-[#9a5b7a]">
+                            {badge}
+                          </span>
+                        )}
+                      </Link>
+                    );
+                  })}
               </nav>
               <div className="mt-auto">
                 <div className="mb-4 rounded-2xl bg-[#ede4f1] p-4">
@@ -1132,6 +1134,22 @@ function App() {
                     <Route
                       path="/reports"
                       component={() => <Reports store={store} />}
+                    />
+                    <Route
+                      path="/admin-approvals"
+                      component={() =>
+                        isAdmin ? (
+                          <AdminApprovalsPage />
+                        ) : (
+                          <div className="rounded-xl border bg-white p-6">
+                            <h2 className="text-xl font-bold">Access Denied</h2>
+                            <p className="mt-2 text-gray-600">
+                              Only EventFlow administrators can access this
+                              page.
+                            </p>
+                          </div>
+                        )
+                      }
                     />
                     <Route component={NotFound} />
                   </Switch>
@@ -4073,6 +4091,130 @@ function EventFlowWelcome() {
         >
           Business
         </button>
+      </div>
+    </div>
+  );
+}
+function AdminApprovalsPage() {
+  const [pendingBusinesses, setPendingBusinesses] = useState<
+    {
+      id: string;
+      full_name: string;
+      created_at: string;
+    }[]
+  >([]);
+
+  const [loadingBusinesses, setLoadingBusinesses] = useState(true);
+  const [businessError, setBusinessError] = useState("");
+
+  const [processingId, setProcessingId] = useState<string | null>(null);
+
+  async function reviewBusiness(
+    businessId: string,
+    decision: "approved" | "rejected",
+  ) {
+    const action = decision === "approved" ? "approve" : "reject";
+
+    if (!window.confirm(`Are you sure you want to ${action} this business?`)) {
+      return;
+    }
+
+    setProcessingId(businessId);
+    setBusinessError("");
+
+    const { error } = await supabase.rpc("review_business_registration", {
+      p_user_id: businessId,
+      p_decision: decision,
+    });
+
+    if (error) {
+      setBusinessError(error.message);
+    } else {
+      setPendingBusinesses((current) =>
+        current.filter((business) => business.id !== businessId),
+      );
+    }
+
+    setProcessingId(null);
+  }
+  useEffect(() => {
+    async function loadPendingBusinesses() {
+      const { data, error } = await supabase
+        .from("profiles")
+        .select("id, full_name, created_at")
+        .eq("account_type", "business")
+        .eq("approval_status", "pending")
+        .order("created_at", { ascending: false });
+
+      if (error) {
+        setBusinessError(error.message);
+      } else {
+        setPendingBusinesses(data ?? []);
+      }
+
+      setLoadingBusinesses(false);
+    }
+
+    void loadPendingBusinesses();
+  }, []);
+  return (
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-3xl font-bold">Business Registration Approvals</h1>
+        <p className="mt-2 text-gray-600">
+          Review and manage business account registrations.
+        </p>
+      </div>
+
+      <div className="rounded-xl border bg-white p-6">
+        <h2 className="text-xl font-semibold">
+          Pending Business Registrations
+        </h2>
+        {loadingBusinesses ? (
+          <p className="mt-3 text-gray-500">
+            Loading business registrations...
+          </p>
+        ) : businessError ? (
+          <p className="mt-3 text-red-600">Error: {businessError}</p>
+        ) : pendingBusinesses.length === 0 ? (
+          <p className="mt-3 text-gray-500">
+            No pending business registrations.
+          </p>
+        ) : (
+          <div className="mt-4 space-y-3">
+            {pendingBusinesses.map((business) => (
+              <div key={business.id} className="rounded-lg border p-4">
+                <p className="font-semibold">{business.full_name}</p>
+
+                <p className="mt-1 text-sm text-gray-500">
+                  Registered:{" "}
+                  {new Date(business.created_at).toLocaleDateString("en-MY")}
+                </p>
+
+                <p className="mt-2 text-sm text-amber-600">Pending approval</p>
+                <div className="mt-4 flex gap-3">
+                  <button
+                    type="button"
+                    disabled={processingId !== null}
+                    onClick={() => reviewBusiness(business.id, "approved")}
+                    className="rounded-lg bg-green-600 px-4 py-2 text-white disabled:opacity-50"
+                  >
+                    {processingId === business.id ? "Processing..." : "Approve"}
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={processingId !== null}
+                    onClick={() => reviewBusiness(business.id, "rejected")}
+                    className="rounded-lg bg-red-600 px-4 py-2 text-white disabled:opacity-50"
+                  >
+                    {processingId === business.id ? "Processing..." : "Reject"}
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
