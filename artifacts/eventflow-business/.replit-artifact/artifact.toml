@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "EventFlow AI Business Portal"
+description = "A responsive event-planning operations portal for managing customer requests, AI-assisted proposals, approvals, events, suppliers, availability, and business analytics with persistent demo data."
+version = "1.0.0"
+id = "artifacts/eventflow-business"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 25443
+
+[services.development]
+run = "pnpm --filter @workspace/eventflow-business run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/eventflow-business", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/eventflow-business/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "25443"
+BASE_PATH = "/"
