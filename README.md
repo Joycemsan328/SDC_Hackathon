@@ -29,7 +29,7 @@
 | **Live Demo** | https://event-flow-ai-customer-portal.replit.app/login |
 | **RunPod Endpoint** | POST https://api.runpod.ai/v2/v14dit7fdqpt7v/runsync \ |
 | **Slide Deck** | https://canva.link/zw39x73wjp5g16i |
-| **Demo Video** | [TO FILL] |
+| **Demo Video** | https://youtu.be/fG2moln09z0 |
 
 ---
 ## Brief Overview
