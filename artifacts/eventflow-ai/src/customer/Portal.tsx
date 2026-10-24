@@ -82,7 +82,7 @@ function EventCard({ event, compact = false }: { event: CustomerEvent; compact?:
       <div className="min-w-0">
         <div className="mb-3 flex flex-wrap items-center gap-2"><StatusBadge status={event.status} /><span className="text-[11px] font-semibold uppercase tracking-[.1em] text-[#a69ba7]">{event.type}</span><span className="rounded-full bg-[#f6f1f5] px-2.5 py-1 text-[10px] font-semibold text-[#817486]">{event.requestSource === 'supabase' ? 'Saved request' : 'Demo sample'}</span></div>
         <h3 className="mb-2 truncate text-[18px] font-bold text-[#514657]">{event.name}</h3>
-        {event.preferredPlanId && <p className="mb-2 text-xs font-semibold text-[#52745f]" data-testid={`text-selected-plan-${event.id}`}>Selected Plan {event.preferredPlanId} · temporary browser-only demo</p>}
+        {event.preferredPlanId && <p className="mb-2 text-xs font-semibold text-[#52745f]" data-testid={`text-selected-plan-${event.id}`}>Selected Plan {event.preferredPlanId} · saved to Supabase</p>}
         <div className="flex flex-wrap gap-x-5 gap-y-2 text-xs text-[#8d8490]"><span className="inline-flex items-center gap-1.5"><CalendarDays size={14} />{friendlyDate(event.date)}</span><span className="inline-flex items-center gap-1.5"><MapPin size={14} />{event.location}</span></div>
       </div>
       <Link href={`/events/${event.id}`} className="inline-flex min-h-10 shrink-0 items-center justify-center gap-2 rounded-xl border border-[#e8dfe7] bg-white px-4 text-xs font-bold text-[#78677a] no-underline transition-colors hover:border-[#c9a7bc] hover:bg-[#fcf8fb]" data-testid={`button-view-event-${event.id}`}>View details <ArrowRight size={14} /></Link>
@@ -228,11 +228,14 @@ function DetailSection({ icon, title, children }: { icon: ReactNode; title: stri
   return <section className="ef-card rounded-2xl p-5 sm:p-6"><div className="mb-4 flex items-center gap-3"><div className="flex h-9 w-9 items-center justify-center rounded-xl bg-[#f6edf3] text-[#a16e8a]">{icon}</div><h2 className="text-base font-bold text-[#574d5d]">{title}</h2></div>{children}</section>;
 }
 function EventDetail({ id }: { id?: string }) {
-  const { events, changeRequests, acceptProposal, preferProposal, requestChanges, remoteLoading, remoteError, reloadSavedEvents } = useCustomer();
+  const { events, changeRequests, acceptProposal, preferProposal, requestChanges, generateProposal, remoteLoading, remoteError, workflowError, reloadSavedEvents } = useCustomer();
   const [, setLocation] = useLocation();
   const [showChangeForm, setShowChangeForm] = useState(false);
   const [changeText, setChangeText] = useState('');
   const [feedback, setFeedback] = useState('');
+  const [actionError, setActionError] = useState('');
+  const [actionBusy, setActionBusy] = useState(false);
+  const actionLock = useRef(false);
   const event = events.find((item) => item.id === id);
   const requests = changeRequests.filter((request) => request.eventId === id);
   if (!event && remoteLoading) return <div role="status" className="ef-card rounded-2xl p-10 text-center text-sm text-[#817886]">Loading your saved event and plans…</div>;
@@ -240,11 +243,30 @@ function EventDetail({ id }: { id?: string }) {
   const isAiDraft = event.status === 'AI Draft' && event.proposal?.source === 'ai-service';
   const isPendingBusinessApproval = event.status === 'Pending Business Approval' && event.proposal?.source === 'persisted-ai';
   const canViewProposal = Boolean(event.proposal);
+  const choosePlan = async (planId: 'A' | 'B') => {
+    if (actionLock.current) return;
+    actionLock.current = true; setActionBusy(true); setActionError(''); setFeedback('');
+    try {
+      const result = await preferProposal(event.id, planId);
+      if (result.error) setActionError(result.error);
+      else setFeedback(`Plan ${planId} saved to Supabase and sent to Business for review.`);
+    } finally { actionLock.current = false; setActionBusy(false); }
+  };
+  const generateMissingPlans = async () => {
+    if (actionLock.current || event.proposal || event.proposalLookup?.state !== 'empty') return;
+    actionLock.current = true; setActionBusy(true); setActionError(''); setFeedback('');
+    try {
+      await generateProposal(event.id, event, 'supabase');
+      setFeedback('Plan A and Plan B were generated and saved.');
+    } catch (error) { setActionError(error instanceof Error ? error.message : 'Generation failed. Your event is still saved.'); }
+    finally { actionLock.current = false; setActionBusy(false); }
+  };
   const handleAccept = (planId: 'A' | 'B') => { acceptProposal(event.id, planId); setFeedback(`Plan ${planId} accepted. Your planner will be in touch with the next steps.`); };
   const submitChanges = (formEvent: FormEvent) => { formEvent.preventDefault(); if (!changeText.trim() || event.status === 'Customer Accepted') return; requestChanges(event.id, changeText.trim()); setShowChangeForm(false); setChangeText(''); setFeedback('Update saved in this demo. Your original request and proposal history have not been overwritten.'); };
   return <div className="ef-enter">
     <button onClick={() => setLocation('/events')} className="mb-5 inline-flex items-center gap-2 text-xs font-bold text-[#8c7d8e] hover:text-[#9c5f7d]" data-testid="button-back-to-events"><ArrowLeft size={15} />Back to my events</button>
     {remoteError && <p role="alert" className="mb-4 rounded-xl border border-[#efcfd1] bg-[#fff4f4] px-4 py-3 text-xs text-[#a34e58]" data-testid="status-customer-data-error">{remoteError}</p>}
+    {(actionError || workflowError) && <p role="alert" className="mb-4 rounded-xl border border-[#efcfd1] bg-[#fff4f4] px-4 py-3 text-xs text-[#a34e58]" data-testid="status-workflow-error">{actionError || workflowError}</p>}
     <div className="mb-7 flex flex-col justify-between gap-4 sm:flex-row sm:items-start">
       <div><div className="mb-3 flex flex-wrap items-center gap-2"><StatusBadge status={event.status} /><span className="text-[11px] font-semibold uppercase tracking-[.1em] text-[#a69ba7]">{event.type}</span></div><h1 className="text-[29px] font-extrabold leading-tight text-[#493f4e] sm:text-[36px]" data-testid="text-event-detail-name">{event.name}</h1><p className="mt-2 flex items-center gap-2 text-sm text-[#897f8d]"><CalendarDays size={15} />{friendlyDate(event.date)} <span className="text-[#d5cbd4]">·</span><MapPin size={15} />{event.location}</p></div>
       <div className="rounded-xl border border-[#eee6ed] bg-white px-4 py-3"><div className="text-[10px] font-bold uppercase tracking-[.12em] text-[#a198a4]">Your budget</div><div className="mt-1 text-base font-extrabold text-[#5b4f60]" data-testid="text-event-budget">{money(event.budget)}</div></div>
@@ -253,6 +275,7 @@ function EventDetail({ id }: { id?: string }) {
     {!canViewProposal && <div role={event.proposalLookup?.state === 'error' ? 'alert' : 'status'} className="mb-5 rounded-2xl border border-[#eadfc8] bg-[#fbf6eb] p-5 sm:p-6" data-testid="status-saved-proposal"><div className="flex gap-3"><div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white text-[#aa8954]"><Clock3 size={17} /></div><div><h2 className="text-sm font-bold text-[#66583e]">{remoteLoading ? 'Checking saved proposals…' : event.proposalLookup?.state === 'error' ? 'Saved proposals could not be displayed' : 'No proposal generated yet'}</h2><p className="mt-1 max-w-2xl text-xs leading-relaxed text-[#8f805f]">{remoteLoading ? 'Reading existing Plan A/B records. No generation is triggered.' : event.proposalLookup?.state === 'error' ? event.proposalLookup.message : 'No saved Plan A/B records were returned for this request. If your planner has already saved them, check customer read permissions and the proposal request ID. Nothing has been generated or overwritten.'}</p></div></div></div>}
     {event.requestSource === 'supabase' && <div className="mb-5 rounded-2xl border border-[#e9dce5] bg-white p-5 sm:p-6" data-testid="status-proposal-lookup-details">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><p className="break-all text-xs text-[#8b818e]">Request ID: {event.id}</p><p className="mt-1 text-xs text-[#8b818e]">{remoteLoading ? 'Checking…' : `${event.proposalLookup?.rowCount ?? 0} saved proposal row(s) returned for this request.`} Lookup: proposals.request_id = requests.id.</p></div><Button type="button" variant="outline" disabled={remoteLoading} onClick={reloadSavedEvents} data-testid="button-check-saved-proposals">{remoteLoading ? 'Checking…' : 'Check saved proposals'}</Button></div>
+      {!canViewProposal && event.proposalLookup?.state === 'empty' && <Button className="mt-4" disabled={actionBusy || remoteLoading} onClick={() => void generateMissingPlans()} data-testid="button-generate-missing-plans"><Sparkles size={16} />{actionBusy ? 'Generating and saving…' : 'Generate saved Plan A/B'}</Button>}
       {!canViewProposal && events.some((item) => item.id !== event.id && item.requestSource === 'supabase' && item.proposal?.source === 'persisted-ai') && <div className="mt-4 border-t border-[#f0eaf0] pt-4"><p className="mb-2 text-xs text-[#8b818e]">Saved Plan A/B are available for a different event request:</p>{events.filter((item) => item.id !== event.id && item.requestSource === 'supabase' && item.proposal?.source === 'persisted-ai').map((item) => <Link key={item.id} href={`/events/${item.id}`} className="mt-2 flex items-center gap-2 text-sm font-semibold text-[#a66b89] hover:underline" data-testid={`link-saved-plan-event-${item.id}`}>{item.name} — view saved Plan A/B <ArrowRight size={14} /></Link>)}</div>}
     </div>}
     <div className="grid gap-4 lg:grid-cols-[1fr_340px]">
@@ -264,7 +287,7 @@ function EventDetail({ id }: { id?: string }) {
         </DetailSection>
         {event.status !== 'Customer Accepted' && <DetailSection icon={<MessageSquareText size={17} />} title="Update your request">
           <p className="mb-3 text-sm leading-relaxed text-[#817586]">Have a new idea? Tell us what you would like to add or change. Your original event request stays the same until the planning team reviews this update.</p>
-          {!showChangeForm ? <Button variant="outline" onClick={() => setShowChangeForm(true)} data-testid="button-update-request"><Plus size={16} />Add a new update</Button> : <form onSubmit={submitChanges} className="rounded-xl border border-[#eee4ec] bg-[#fdfafb] p-4" data-testid="form-update-request">
+          {event.requestSource === 'supabase' ? <p className="text-xs text-[#8b818e]">Your original request is saved. Business review messages appear with your selected plan below.</p> : !showChangeForm ? <Button variant="outline" onClick={() => setShowChangeForm(true)} data-testid="button-update-request"><Plus size={16} />Add a new update</Button> : <form onSubmit={submitChanges} className="rounded-xl border border-[#eee4ec] bg-[#fdfafb] p-4" data-testid="form-update-request">
             <label className="text-xs font-bold text-[#655b69]" htmlFor="update-request">What would you like to update?</label>
             <textarea id="update-request" value={changeText} onChange={(e) => setChangeText(e.target.value)} required maxLength={2000} rows={4} className={`${inputClass} py-3`} placeholder="e.g. Please change the theme to Garden Party, increase to 50 guests, and include photography." data-testid="textarea-update-request" />
             <p className="mt-2 text-[11px] text-[#988e9b]">This update is saved locally for this demo. Business staff will receive it after a shared backend is connected.</p>
@@ -273,13 +296,14 @@ function EventDetail({ id }: { id?: string }) {
         </DetailSection>}
         {canViewProposal && event.proposal && <DetailSection icon={<Sparkles size={17} />} title={isPendingBusinessApproval ? 'Compare your AI draft plans' : isAiDraft ? 'Compare your AI draft plans' : 'Compare your approved plans'}>
           <div className={`mb-4 rounded-xl px-4 py-3 text-xs leading-relaxed ${isAiDraft || isPendingBusinessApproval ? 'border border-[#e6d9ef] bg-[#f7f2fa] text-[#705d7f]' : 'bg-[#f7eff4] text-[#7e6c80]'}`} data-testid={isPendingBusinessApproval ? 'status-proposal-pending-business-approval' : isAiDraft ? 'status-ai-draft-not-approved' : 'status-approved-proposal'}>{isPendingBusinessApproval ? <><strong>Saved AI draft — not a confirmed quotation.</strong> Compare your existing Plan A and Plan B below. No proposals are generated when viewing or selecting a plan.</> : isAiDraft ? <><strong>Unapproved AI Draft — Demo Only.</strong> These AI-generated plans are for development/demo review only and cannot be accepted until the planning team approves them.</> : 'Review these saved options, assumptions, and unconfirmed costs before choosing.'}</div>
-          {event.proposal.source === 'persisted-ai' && <div role="status" className="mb-4 rounded-xl border border-[#e6d9ef] bg-[#f7f2fa] px-4 py-3 text-xs leading-relaxed text-[#705d7f]" data-testid="status-demo-plan-selection"><strong>{event.preferredPlanId ? `Selected Plan ${event.preferredPlanId}` : 'No plan selected yet'} — temporary demo-only selection.</strong> Saved only in this browser, not to Supabase. This does not submit a choice to staff or change any saved request, plan, or quotation.</div>}
+          {event.proposal.source === 'persisted-ai' && <div role="status" className="mb-4 rounded-xl border border-[#e6d9ef] bg-[#f7f2fa] px-4 py-3 text-xs leading-relaxed text-[#705d7f]" data-testid="status-plan-selection"><strong>{event.preferredPlanId ? `Selected Plan ${event.preferredPlanId} — saved to Supabase.` : 'No plan selected yet.'}</strong> {event.selection?.decision === 'approved' ? 'Business approved your selected plan.' : event.selection?.decision === 'changes_requested' ? 'Business requested changes. Read the message below, then select a plan to resubmit for review.' : event.preferredPlanId ? 'Awaiting Business review. Your choice is available across accounts and devices.' : 'Choose one plan to submit it for Business review. Existing proposals remain unchanged.'}</div>}
+          {event.selection && event.selection.decision !== 'pending' && <div className="mb-4 rounded-xl border border-[#d6e8dc] bg-[#f2f8f4] px-4 py-3 text-sm text-[#56765f]" data-testid="status-business-decision"><strong>Business {event.selection.decision === 'approved' ? 'approved' : 'requested changes to'} Plan {event.selection.plan_key}</strong>{event.selection.message && <p className="mt-2 whitespace-pre-wrap" data-testid="text-business-message">{event.selection.message}</p>}<p className="mt-2 text-xs">Saved {event.selection.reviewed_at ? new Date(event.selection.reviewed_at).toLocaleString() : ''}. Decisions refresh automatically every 10 seconds.</p></div>}
           <div className="grid gap-4 xl:grid-cols-2">{event.proposal.plans.map((plan) => {
             const overBudget = plan.total - event.budget;
             const accepted = event.acceptedPlanId === plan.id;
             const selectedForReview = event.preferredPlanId === plan.id;
             return <article key={plan.id} className={`rounded-2xl border p-4 sm:p-5 ${accepted || selectedForReview ? 'border-[#aac9b1] bg-[#f7fbf7]' : 'border-[#eee5ec] bg-white'}`} data-testid={`card-plan-${plan.id.toLowerCase()}`}>
-              <div className="flex items-start justify-between gap-3"><div><p className="text-[10px] font-bold uppercase tracking-[.14em] text-[#a77a94]">Plan {plan.id}</p><h3 className="mt-1 text-lg font-extrabold text-[#514657]">{plan.title}</h3></div>{accepted && <span className="rounded-full bg-[#e8f3ed] px-3 py-1 text-[10px] font-bold text-[#52745f]">Accepted</span>}{selectedForReview && <span className="rounded-full bg-[#e8f3ed] px-3 py-1 text-[10px] font-bold text-[#52745f]" data-testid={`status-plan-selected-${plan.id.toLowerCase()}`}>Selected · demo</span>}</div>
+              <div className="flex items-start justify-between gap-3"><div><p className="text-[10px] font-bold uppercase tracking-[.14em] text-[#a77a94]">Plan {plan.id}</p><h3 className="mt-1 text-lg font-extrabold text-[#514657]">{plan.title}</h3></div>{accepted && <span className="rounded-full bg-[#e8f3ed] px-3 py-1 text-[10px] font-bold text-[#52745f]">Accepted</span>}{selectedForReview && <span className="rounded-full bg-[#e8f3ed] px-3 py-1 text-[10px] font-bold text-[#52745f]" data-testid={`status-plan-selected-${plan.id.toLowerCase()}`}>Selected</span>}</div>
               <p className="mt-3 text-sm leading-relaxed text-[#756b7a]">{plan.concept}</p>
               <div className="mt-4 space-y-4 border-t border-[#f0eaf0] pt-4">
                 <div><h4 className="text-[10px] font-bold uppercase tracking-[.1em] text-[#a097a4]">Event concept and theme</h4><p className="mt-1 text-xs font-semibold text-[#635969]">{plan.theme}</p></div>
@@ -291,8 +315,8 @@ function EventDetail({ id }: { id?: string }) {
                 <div><h4 className="text-[10px] font-bold uppercase tracking-[.1em] text-[#a097a4]">AI recommendation</h4><p className="mt-1 text-xs leading-relaxed text-[#756b7a]">{plan.recommendation}</p></div>
                 <div className="grid gap-3 sm:grid-cols-2"><div><h4 className="text-[10px] font-bold uppercase tracking-[.1em] text-[#a097a4]">Assumptions</h4><ul className="mt-1 list-disc space-y-1 pl-4 text-[11px] leading-relaxed text-[#756b7a]">{plan.assumptions.map((item) => <li key={item}>{item}</li>)}</ul></div><div><h4 className="text-[10px] font-bold uppercase tracking-[.1em] text-[#a097a4]">Unconfirmed costs</h4><ul className="mt-1 list-disc space-y-1 pl-4 text-[11px] leading-relaxed text-[#756b7a]">{plan.unconfirmedCosts.map((item) => <li key={item}>{item}</li>)}</ul></div></div>
               </div>
-              {event.status === 'Approved for Customer' && <Button onClick={() => handleAccept(plan.id)} className="mt-4 w-full" data-testid={`button-accept-plan-${plan.id.toLowerCase()}`}><Check size={16} />Accept Plan {plan.id}</Button>}
-              {event.proposal?.source === 'persisted-ai' && event.status !== 'Customer Accepted' && <Button variant="outline" aria-pressed={selectedForReview} onClick={() => { const result = preferProposal(event.id, plan.id); setFeedback(result.error ?? (result.stored ? `Plan ${plan.id} selected — temporary demo-only choice saved in this browser. Supabase records are unchanged.` : `Plan ${plan.id} selected for this session only. Browser storage is unavailable; this demo selection will be lost on refresh.`)); }} className="mt-4 w-full" data-testid={`button-prefer-plan-${plan.id.toLowerCase()}`}><Heart size={16} />{selectedForReview ? `Selected Plan ${plan.id} · demo only` : `Select Plan ${plan.id}`}</Button>}
+              {event.status === 'Approved for Customer' && event.proposal?.source !== 'persisted-ai' && <Button onClick={() => handleAccept(plan.id)} className="mt-4 w-full" data-testid={`button-accept-plan-${plan.id.toLowerCase()}`}><Check size={16} />Accept Plan {plan.id}</Button>}
+              {event.proposal?.source === 'persisted-ai' && event.status !== 'Customer Accepted' && <Button variant="outline" disabled={actionBusy || event.selection?.decision === 'approved' || (selectedForReview && event.selection?.decision === 'pending')} aria-pressed={selectedForReview} onClick={() => void choosePlan(plan.id)} className="mt-4 w-full" data-testid={`button-prefer-plan-${plan.id.toLowerCase()}`}><Heart size={16} />{actionBusy ? 'Saving selection…' : selectedForReview && event.selection?.decision === 'changes_requested' ? `Resubmit Plan ${plan.id}` : selectedForReview ? `Selected Plan ${plan.id}` : `Select Plan ${plan.id}`}</Button>}
             </article>;
           })}</div>
           {event.status === 'Customer Accepted' && <div className="mt-4 flex items-center gap-2 rounded-xl bg-[#edf5ef] px-4 py-3 text-sm font-semibold text-[#587660]" data-testid="status-proposal-accepted"><CheckCircle2 size={17} />Plan {event.acceptedPlanId} accepted</div>}

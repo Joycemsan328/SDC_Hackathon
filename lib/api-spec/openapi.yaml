@@ -11,6 +11,68 @@ tags:
   - name: health
     description: Health operations
 paths:
+  /proposals/generate-persisted:
+    post:
+      operationId: generatePersistedProposalPair
+      summary: Generate and persist an initial saved Plan A/B pair, or return the existing pair
+      security:
+        - customerBearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PersistedProposalRequest"
+      responses:
+        "200":
+          description: Canonical saved pair, never unsaved AI output
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [requestId, revision, persistence, proposals]
+                properties:
+                  requestId:
+                    type: string
+                    format: uuid
+                  revision:
+                    type: integer
+                  persistence:
+                    type: string
+                    enum: [created, existing]
+                  proposals:
+                    type: array
+                    minItems: 2
+                    maxItems: 2
+                    items:
+                      type: object
+                      required: [proposal_id, plan_key, status, recommendation, plan_content]
+                      properties:
+                        proposal_id:
+                          type: string
+                          format: uuid
+                        plan_key:
+                          type: string
+                          enum: [A, B]
+                        status:
+                          type: string
+                        recommendation:
+                          type: string
+                        plan_content:
+                          type: object
+                          additionalProperties: true
+        "400":
+          description: Invalid saved request ID
+        "401":
+          description: Sign in with an approved customer account
+        "403":
+          description: Customer access denied
+        "404":
+          description: Owned request not found
+        "409":
+          description: Generation is already in progress
+        "503":
+          description: Migration, persistence, Supabase, or RunPod is unavailable; request remains saved
   /healthz:
     get:
       operationId: healthCheck
@@ -25,7 +87,19 @@ paths:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
 components:
+  securitySchemes:
+    customerBearer:
+      type: http
+      scheme: bearer
   schemas:
+    PersistedProposalRequest:
+      type: object
+      additionalProperties: false
+      required: [requestId]
+      properties:
+        requestId:
+          type: string
+          format: uuid
     HealthStatus:
       type: object
       properties:

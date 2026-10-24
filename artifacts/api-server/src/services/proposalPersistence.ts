@@ -1,18 +1,19 @@
 import { z } from "zod";
-import { GeneratedProposalSchema, ProposalPlanASchema, ProposalPlanBSchema, type GeneratedProposal } from "./proposalGenerator";
+import { randomUUID } from "node:crypto";
+import { GeneratedProposalSchema, type GeneratedProposal } from "./proposalGenerator";
 import { CustomerRequestRowSchema, type CustomerRequestRow } from "./customerSupabase";
 
 const PersistedPlanSchema = z.object({
   plan_key: z.enum(["A", "B"]),
   proposal_id: z.string().uuid(),
   status: z.string().min(1),
-  recommendation: z.string().min(1),
+  recommendation: z.string().nullable().transform((value) => value || "No recommendation provided."),
   plan_content: z.unknown(),
 }).strict();
 const PersistedLookupRowSchema = PersistedPlanSchema.omit({ proposal_id: true }).extend({
   id: z.string().uuid(),
   request_id: z.string().uuid(),
-  revision: z.string(),
+  revision: z.union([z.string(), z.number()]).transform(String),
 }).strict();
 
 const PersistedPairSchema = z.object({
@@ -77,6 +78,7 @@ export class ProposalPersistenceError extends Error {
 }
 
 export interface ProposalPairRepository {
+  claimGeneration? (requestId: string): Promise<void>;
   findExisting(input: { requestId: string; revision: number }): Promise<z.infer<typeof PersistedPairSchema> | null>;
   persist(input: {
     customerId: string;
@@ -99,9 +101,30 @@ export class SupabaseAdminProposalPairRepository implements ProposalPairReposito
     baseUrl: string,
     secretKey: string,
     private readonly fetchImpl: FetchLike = fetch,
+    private readonly customerToken?: string,
   ) {
     this.baseUrl = baseUrl.replace(/\/+$/, "");
     this.secretKey = secretKey;
+  }
+
+  private readonly generationToken = randomUUID();
+
+  async claimGeneration(requestId: string) {
+    if (!this.customerToken) return; // Legacy admin repository keeps its existing contract.
+    const response = await this.fetchImpl(`${this.baseUrl}/rest/v1/rpc/eventflow_claim_generation`, {
+      method: "POST",
+      headers: { ...this.headers(), "content-type": "application/json" },
+      body: JSON.stringify({ p_request_id: requestId, p_token: this.generationToken }),
+      signal: AbortSignal.timeout(15_000),
+    }).catch(() => null);
+    if (!response?.ok) {
+      throw new ProposalPersistenceError("WORKFLOW_NOT_READY", 503,
+        "The Supabase workflow migration is not ready or generation permission was denied. Your event is saved. No RunPod call was made; ask the owner to approve/apply scripts/sql/eventflow-mvp-workflow.sql.");
+    }
+    if (await response.json().catch(() => false) !== true) {
+      throw new ProposalPersistenceError("GENERATION_IN_PROGRESS", 409,
+        "Generation is already running for this event. Reload saved proposals shortly. After an interrupted attempt, the safety lease expires within 10 minutes.");
+    }
   }
 
   async findExisting(input: { requestId: string; revision: number }) {
@@ -130,7 +153,8 @@ export class SupabaseAdminProposalPairRepository implements ProposalPairReposito
 
   async persist(input: Parameters<ProposalPairRepository["persist"]>[0]) {
     try {
-      const response = await this.fetchImpl(`${this.baseUrl}/rest/v1/rpc/persist_runpod_ai_proposal_pair`, {
+      const rpcName = this.customerToken ? "eventflow_persist_proposal_pair" : "persist_runpod_ai_proposal_pair";
+      const response = await this.fetchImpl(`${this.baseUrl}/rest/v1/rpc/${rpcName}`, {
         method: "POST",
         headers: { ...this.headers(), "content-type": "application/json" },
         body: JSON.stringify({
@@ -140,7 +164,9 @@ export class SupabaseAdminProposalPairRepository implements ProposalPairReposito
           p_recommendation: input.recommendation,
           p_proposal_fields: input.proposalFields,
           p_plans: input.proposal.plans,
+          ...(this.customerToken ? { p_generation_token: this.generationToken } : {}),
         }),
+        signal: AbortSignal.timeout(20_000),
       }).catch(() => null);
       if (!response?.ok) {
         // An RPC can commit while its response is lost, or a concurrent retry can win.
@@ -158,7 +184,7 @@ export class SupabaseAdminProposalPairRepository implements ProposalPairReposito
   }
 
   private headers(): Record<string, string> {
-    return { apikey: this.secretKey, authorization: `Bearer ${this.secretKey}`, accept: "application/json" };
+    return { apikey: this.secretKey, authorization: `Bearer ${this.customerToken || this.secretKey}`, accept: "application/json" };
   }
 
   private validatePair(input: unknown, expected?: { requestId: string; revision: number }) {
@@ -167,12 +193,26 @@ export class SupabaseAdminProposalPairRepository implements ProposalPairReposito
       || (expected && (pair.data.request_id !== expected.requestId || pair.data.revision !== expected.revision))) {
       throw new ProposalPersistenceError("INVALID_PERSISTENCE_RESPONSE", 503, "Saved proposals could not be verified.");
     }
-    const contentIsValid = pair.data.proposals.every((row) => row.plan_key === "A"
-      ? ProposalPlanASchema.safeParse(row.plan_content).success
-      : ProposalPlanBSchema.safeParse(row.plan_content).success);
+    // Legacy saved pairs can omit optional narrative fields. Validate identity
+    // and prices here; never regenerate a valid existing pair just for enrichment.
+    const contentIsValid = pair.data.proposals.every((row) => {
+      const content = z.object({
+        id: z.literal(row.plan_key), title: z.string(),
+        costBreakdown: z.array(z.object({ item: z.string(), description: z.string(), amountMYR: z.coerce.number().finite().nonnegative() })),
+        totalEstimatedMYR: z.coerce.number().finite().nonnegative(),
+      }).safeParse(row.plan_content);
+      return content.success;
+    });
     if (!contentIsValid) throw new ProposalPersistenceError("INVALID_PERSISTED_CONTENT", 503, "Saved proposal content could not be verified.");
     return pair.data;
   }
+}
+
+export function createCustomerProposalRepository(env: NodeJS.ProcessEnv, accessToken: string, fetchImpl?: FetchLike) {
+  const url = env["SUPABASE_URL"]?.trim() || env["VITE_SUPABASE_URL"]?.trim();
+  const key = env["SUPABASE_PUBLISHABLE_KEY"]?.trim() || env["VITE_SUPABASE_PUBLISHABLE_KEY"]?.trim();
+  if (!url || !key || !/^https:\/\//.test(url)) return null;
+  return new SupabaseAdminProposalPairRepository(url, key, fetchImpl, accessToken);
 }
 
 export function createSupabaseAdminProposalRepository(env: NodeJS.ProcessEnv = process.env, fetchImpl?: FetchLike) {

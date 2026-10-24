@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "./lib/supabase";
+import SavedPlanReview, { persistReview, selectionErrorMessage, type PlanSelection, type ReviewDecision } from "./components/SavedPlanReview";
 import type { Session } from "@supabase/supabase-js";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ErrorBoundary } from "@/components/error-boundary";
@@ -244,7 +245,7 @@ type Proposal = {
   planKey?: "A" | "B";
   planContent?: ProposalPlanContent;
   customerSelectedForReview?: boolean;
-  demoSelection?: boolean;
+  selection?: PlanSelection;
 };
 type SupabaseProposalRow = {
   id: string;
@@ -303,16 +304,6 @@ type Store = {
 };
 
 const DB_KEY = "eventflow-demo-v1";
-const OPTION_B_DEMO_SELECTIONS_KEY = "eventflow-option-b-demo-selections-v1";
-type OptionBDemoSelection = { customerId: string; planKey: "A" | "B"; revision?: string; selectedAt?: string };
-function readOptionBDemoSelections(): Record<string, OptionBDemoSelection> {
-  try {
-    const value = JSON.parse(localStorage.getItem(OPTION_B_DEMO_SELECTIONS_KEY) || "{}");
-    return value && typeof value === "object" && !Array.isArray(value) ? value : {};
-  } catch {
-    return {};
-  }
-}
 function isInApprovalQueue(proposal: Proposal): boolean {
   const isPending = proposal.status === "Pending Approval" || proposal.status === "Pending Business Approval";
   return isPending && (proposal.source !== "supabase" || proposal.customerSelectedForReview === true);
@@ -675,19 +666,15 @@ function App() {
   const [requestFetchState, setRequestFetchState] = useState<"idle" | "loading" | "loaded" | "error">("idle");
   const [requestFetchError, setRequestFetchError] = useState("");
   const [supabaseProposals, setSupabaseProposals] = useState<Proposal[]>([]);
-  const [demoPlanSelections, setDemoPlanSelections] = useState(readOptionBDemoSelections);
+  const [planSelections, setPlanSelections] = useState<PlanSelection[]>([]);
+  const [selectionError, setSelectionError] = useState("");
+  const [remoteVersion, setRemoteVersion] = useState(0);
   const [proposalFetchState, setProposalFetchState] = useState<"idle" | "loading" | "loaded" | "error">("idle");
   const [proposalFetchError, setProposalFetchError] = useState("");
   const [session, setSession] = useState<Session | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [isStaff, setIsStaff] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
-
-  useEffect(() => {
-    const refreshSelections = () => setDemoPlanSelections(readOptionBDemoSelections());
-    window.addEventListener("storage", refreshSelections);
-    return () => window.removeEventListener("storage", refreshSelections);
-  }, []);
 
   useEffect(() => {
     let active = true;
@@ -750,6 +737,28 @@ function App() {
   }, []);
   const staffUserId = isStaff ? session?.user.id : undefined;
   useEffect(() => {
+    if (!staffUserId) return;
+    const refresh = () => setRemoteVersion((version) => version + 1);
+    const timer = window.setInterval(refresh, 10_000);
+    window.addEventListener("focus", refresh);
+    return () => { window.clearInterval(timer); window.removeEventListener("focus", refresh); };
+  }, [staffUserId]);
+  useEffect(() => {
+    let active = true;
+    if (!staffUserId) { setPlanSelections([]); setSelectionError(""); return; }
+    void (async () => {
+      try {
+        const { data, error } = await supabase.from("eventflow_plan_selections")
+          .select("request_id, customer_id, proposal_id, plan_key, revision, decision, message, selected_at, reviewed_at");
+        if (!active) return;
+        if (error) { setSelectionError(selectionErrorMessage(error)); setPlanSelections([]); return; }
+        setPlanSelections((data ?? []) as PlanSelection[]);
+        setSelectionError("");
+      } catch { if (active) { setSelectionError("Saved customer selections could not be refreshed."); setPlanSelections([]); } }
+    })();
+    return () => { active = false; };
+  }, [staffUserId, remoteVersion]);
+  useEffect(() => {
     if (authLoading) return;
     if (!staffUserId) {
       setSupabaseRequests([]);
@@ -786,7 +795,7 @@ function App() {
     })();
 
     return () => { active = false; };
-  }, [authLoading, staffUserId]);
+  }, [authLoading, staffUserId, remoteVersion]);
   useEffect(() => {
     if (authLoading) return;
     if (!staffUserId) {
@@ -850,7 +859,7 @@ function App() {
     })();
 
     return () => { active = false; };
-  }, [authLoading, staffUserId]);
+  }, [authLoading, staffUserId, remoteVersion]);
   useEffect(() => {
     async function testConnection() {
       const { data, error } = await supabase
@@ -883,24 +892,25 @@ function App() {
   const proposalsForViews = useMemo(() => {
     const merged = new Map<string, Proposal>();
     for (const proposal of supabaseProposals) {
-      const selection = demoPlanSelections[proposal.requestId];
-      const selected = selection?.planKey === proposal.planKey && selection.revision === proposal.revision;
-      const status = selected && proposal.status === "Awaiting Customer"
-        ? "Pending Business Approval"
-        : proposal.status;
+      const selection = planSelections.find((item) => item.request_id === proposal.requestId && item.proposal_id === proposal.id
+        && item.plan_key === proposal.planKey && item.revision === proposal.revision);
+      const selected = !!selection;
+      const status = selection?.decision === "approved" ? "Approved for Customer"
+        : selection?.decision === "changes_requested" ? "Changes Requested"
+        : selected ? "Pending Business Approval" : proposal.status;
       merged.set(proposal.id, {
         ...proposal,
         status,
         source: "supabase",
         customerSelectedForReview: selected,
-        demoSelection: selected,
+        selection,
       });
     }
     for (const proposal of store.proposals) {
       if (!merged.has(proposal.id)) merged.set(proposal.id, { ...proposal, source: "demo" });
     }
     return Array.from(merged.values());
-  }, [store.proposals, supabaseProposals, demoPlanSelections]);
+  }, [store.proposals, supabaseProposals, planSelections]);
   const proposalViewStore = useMemo(() => ({ ...requestViewStore, proposals: proposalsForViews }), [requestViewStore, proposalsForViews]);
   const showRequestFetchStatus = requestFetchState !== "idle";
   useEffect(() => {
@@ -1056,47 +1066,20 @@ function App() {
   };
 
 
+const reviewSelectedPlan = async (p: Proposal, decision: ReviewDecision, message: string) => {
+  if (!p.selection || !p.customerSelectedForReview) return { error: "The customer has not selected this plan for review." };
+  try {
+    const selection = await persistReview(p.selection, decision, message);
+    setPlanSelections((current) => [selection, ...current.filter((item) => item.request_id !== p.requestId)]);
+    setRemoteVersion((version) => version + 1);
+    return {};
+  } catch (error) { return { error: error instanceof Error ? error.message : "The decision could not be saved." }; }
+};
 const approveProposal = async (p: Proposal): Promise<boolean> => {
-  // Saved AI proposals: approve Plan A and Plan B together
   if (p.source === "supabase") {
-    if (p.status !== "Pending Business Approval") {
-      flash("This proposal is not awaiting Business approval.");
-      return false;
-    }
-
-    if (!p.requestId || !p.revision) {
-      flash("Missing request ID or revision.");
-      return false;
-    }
-
-    try {
-      const { data, error } = await supabase.rpc(
-        "approve_ai_proposal_pair",
-        {
-          p_request_id: p.requestId,
-          p_revision: p.revision,
-        }
-      );
-
-      if (error) {
-        console.error("Business approval failed:", error);
-        flash(`Approval failed: ${error.message}`);
-        return false;
-      }
-
-      if (data !== 2) {
-        flash("Unexpected approval result. Please refresh.");
-        return false;
-      }
-
-      flash("Plan A and Plan B approved successfully!");
-      window.location.reload();
-      return true;
-    } catch (error) {
-      console.error("Unexpected approval error:", error);
-      flash("Unable to approve proposals.");
-      return false;
-    }
+    const result = await reviewSelectedPlan(p, "approved", "");
+    flash(result.error || `Selected Plan ${p.planKey} approved.`);
+    return !result.error;
   }
 
   // Keep the original demo approval behavior
@@ -1402,6 +1385,7 @@ const approveProposal = async (p: Proposal): Promise<boolean> => {
               </header>
               <div className="mx-auto max-w-[1440px] p-4 pb-12 md:px-8 md:py-7">
                 <ErrorBoundary resetKey={location}>
+                  {selectionError && <p role="alert" className="mb-4 rounded-xl border border-[#efcfd1] bg-[#fff4f4] p-4 text-xs text-[#a34e58]" data-testid="status-plan-selection-error">{selectionError}</p>}
                   <Switch>
                     <Route
                       path="/"
@@ -1440,9 +1424,7 @@ const approveProposal = async (p: Proposal): Promise<boolean> => {
                         />
                       )}
                     />
-                    <Route
-                      path="/proposals"
-                      component={() => (
+                    <Route path="/proposals">
                         <Proposals
                           store={proposalViewStore}
                           setLocation={setLocation}
@@ -1450,32 +1432,27 @@ const approveProposal = async (p: Proposal): Promise<boolean> => {
                           proposalFetchError={proposalFetchError}
                           supabaseProposalCount={supabaseProposals.length}
                         />
-                      )}
-                    />
-                    <Route
-                      path="/proposals/:id"
-                      component={() => (
+                    </Route>
+                    <Route path="/proposals/:id">
                         <ProposalDetail
                           store={proposalViewStore}
                           saveProposal={saveProposal}
                           approve={approveProposal}
+                          reviewSelection={reviewSelectedPlan}
                           accept={acceptProposal}
                           flash={flash}
                         />
-                      )}
-                    />
-                    <Route
-                      path="/approvals"
-                      component={() => (
+                    </Route>
+                    <Route path="/approvals">
                         <Approvals
                           store={proposalViewStore}
                           setLocation={setLocation}
                           approve={approveProposal}
+                          reviewSelection={reviewSelectedPlan}
                           saveProposal={saveProposal}
                           flash={flash}
                         />
-                      )}
-                    />
+                    </Route>
                     <Route
                       path="/events"
                       component={() => (
@@ -2519,7 +2496,7 @@ function ProposalCard({ proposal: p, setLocation }: any) {
                 })}
               </p>
               {p.source === "supabase" && (
-                <p className="mt-1 text-[10px] text-[#817486]">{p.customerSelectedForReview ? `Customer selected Plan ${p.planKey} · browser demo selection` : "Saved proposal · not selected for review"} · Request {p.requestId}</p>
+                <p className="mt-1 text-[10px] text-[#817486]">{p.customerSelectedForReview ? `Customer selected Plan ${p.planKey} · saved to Supabase` : "Saved proposal · not selected for review"} · Request {p.requestId}</p>
               )}
             </div>
             <Status value={p.status} />
@@ -2570,7 +2547,7 @@ function Moodboard({ type }: any) {
     </div>
   );
 }
-function ProposalDetail({ store, saveProposal, approve, accept, flash }: any) {
+function ProposalDetail({ store, saveProposal, approve, reviewSelection, accept, flash }: any) {
   const { id = "" } = useParams();
   const p0: Proposal | undefined = store.proposals.find(
     (x: Proposal) => x.id === id,
@@ -2582,7 +2559,7 @@ function ProposalDetail({ store, saveProposal, approve, accept, flash }: any) {
   if (!p) return <NotFound />;
   const total = p.lines.reduce((a, l) => a + l.qty * l.price, 0);
   const req = store.requests.find((r: Req) => r.id === p.requestId);
-  if (p.source === "supabase") return <SavedProposalDetail proposal={p} request={req} />;
+  if (p.source === "supabase") return <SavedProposalDetail proposal={p0 ?? p} request={req} reviewSelection={reviewSelection} />;
   const patch = (next: Proposal) => {
     setP(next);
     saveProposal(next);
@@ -2882,7 +2859,7 @@ function ProposalDetail({ store, saveProposal, approve, accept, flash }: any) {
     </div>
   );
 }
-function SavedProposalDetail({ proposal: p, request }: { proposal: Proposal; request?: Req }) {
+function SavedProposalDetail({ proposal: p, request, reviewSelection }: { proposal: Proposal; request?: Req; reviewSelection: (proposal: Proposal, decision: ReviewDecision, message: string) => Promise<{ error?: string }> }) {
   const content = p.planContent;
   const breakdown = content?.costBreakdown?.length
     ? content.costBreakdown
@@ -2901,7 +2878,7 @@ function SavedProposalDetail({ proposal: p, request }: { proposal: Proposal; req
       />
       <div className="mb-4 rounded-xl border border-[#e7dfe9] bg-[#fbf8fc] px-4 py-3 text-xs text-[#74677b]" role="note">
         {p.customerSelectedForReview
-          ? `Customer selected Plan ${p.planKey} for review. This demo selection is stored in this browser only; no Supabase proposal record was changed.`
+          ? `Customer selected Plan ${p.planKey} for review. This choice is saved in Supabase and available across devices.`
           : "Saved proposal · Read-only. Only a customer-selected plan appears in the approval queue."}
       </div>
       <div className="grid gap-5 xl:grid-cols-[1.55fr_1fr]">
@@ -2956,6 +2933,7 @@ function SavedProposalDetail({ proposal: p, request }: { proposal: Proposal; req
           )}
         </div>
         <aside className="space-y-5">
+          <Panel className="p-5"><SectionTitle>Business decision</SectionTitle><div className="mt-3"><SavedPlanReview key={`${p.selection?.proposal_id}-${p.selection?.selected_at}`} selection={p.selection} onReview={(decision, message) => reviewSelection(p, decision, message)} /></div></Panel>
           <Panel className="p-5">
             <SectionTitle>Linked customer request</SectionTitle>
             <div className="mt-3 space-y-3 text-[11px]">
@@ -2974,7 +2952,7 @@ function SavedProposalDetail({ proposal: p, request }: { proposal: Proposal; req
     </div>
   );
 }
-function Approvals({ store, setLocation, approve, saveProposal, flash }: any) {
+function Approvals({ store, setLocation, approve, reviewSelection, saveProposal, flash }: any) {
   const pending = store.proposals.filter((p: Proposal) => isInApprovalQueue(p));
   return (
     <div className="fade-in">
@@ -3020,6 +2998,7 @@ function Approvals({ store, setLocation, approve, saveProposal, flash }: any) {
               key={p.id}
               p={p}
               approve={approve}
+              reviewSelection={reviewSelection}
               saveProposal={saveProposal}
               setLocation={setLocation}
               flash={flash}
@@ -3038,7 +3017,7 @@ function Approvals({ store, setLocation, approve, saveProposal, flash }: any) {
     </div>
   );
 }
-function ApprovalCard({ p, approve, saveProposal, setLocation, flash }: any) {
+function ApprovalCard({ p, approve, reviewSelection, saveProposal, setLocation, flash }: any) {
   const [checklist, setChecklist] = useState(p.checklist);
   const isSaved = p.source === "supabase";
   const total = p.planContent?.totalEstimatedMYR ?? p.lines.reduce((a: number, l: Line) => a + l.qty * l.price, 0);
@@ -3067,7 +3046,7 @@ function ApprovalCard({ p, approve, saveProposal, setLocation, flash }: any) {
                 of {money(p.budget)} budget
               </span>
             </p>
-            {isSaved && p.customerSelectedForReview && <p className="mt-2 text-[10px] font-bold text-[#64806b]" data-testid={`text-demo-selected-plan-${p.id}`}>Customer-selected Plan {p.planKey} · demo only</p>}
+            {isSaved && p.customerSelectedForReview && <p className="mt-2 text-[10px] font-bold text-[#64806b]" data-testid={`text-selected-plan-${p.id}`}>Customer-selected Plan {p.planKey} · saved to Supabase</p>}
           </div>
         </div>
         <Button
@@ -3107,19 +3086,7 @@ function ApprovalCard({ p, approve, saveProposal, setLocation, flash }: any) {
       </div>
      
 {isSaved ? (
-  <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-[#f1edf1] pt-4">
-    <p className="text-xs text-[#74677b]">
-      Customer-selected proposal · demo-only review; database approval is not enabled
-    </p>
-
-    <Button
-      variant="outline"
-      onClick={() => setLocation(`/proposals/${p.id}`)}
-      testid={`button-review-selected-${p.id}`}
-    >
-      <Eye size={14} /> Review selected Plan {p.planKey}
-    </Button>
-  </div>
+  <div className="mt-4 border-t border-[#f1edf1] pt-4"><SavedPlanReview key={`${p.selection?.proposal_id}-${p.selection?.selected_at}`} selection={p.selection} onReview={(decision, message) => reviewSelection(p, decision, message)} /></div>
 ) : (
 
       <div className="mt-4 flex flex-wrap justify-end gap-2 border-t border-[#f1edf1] pt-4">

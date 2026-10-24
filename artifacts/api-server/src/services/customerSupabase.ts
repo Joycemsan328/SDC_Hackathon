@@ -58,9 +58,9 @@ export class SupabaseCustomerRequestGateway implements CustomerRequestGateway {
     env: NodeJS.ProcessEnv = process.env,
     private readonly fetchImpl: FetchLike = fetch,
   ) {
-    const configuredUrl = env["SUPABASE_URL"]?.trim();
+    const configuredUrl = env["SUPABASE_URL"]?.trim() || env["VITE_SUPABASE_URL"]?.trim();
     this.baseUrl = configuredUrl ? configuredUrl.replace(/\/+$/, "") : null;
-    this.publishableKey = env["SUPABASE_PUBLISHABLE_KEY"]?.trim() || null;
+    this.publishableKey = env["SUPABASE_PUBLISHABLE_KEY"]?.trim() || env["VITE_SUPABASE_PUBLISHABLE_KEY"]?.trim() || null;
   }
 
   async loadOwnedRequest(accessToken: string, requestId: string): Promise<OwnedCustomerRequest | null> {

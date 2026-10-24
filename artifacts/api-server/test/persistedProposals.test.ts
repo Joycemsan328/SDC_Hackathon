@@ -5,7 +5,7 @@ import express from "express";
 import { test } from "node:test";
 import { createPersistedProposalRouter } from "../src/routes/persistedProposals";
 import { CustomerDataAccessError, mapSavedRequestToProposalInput, SupabaseCustomerRequestGateway, type CustomerRequestGateway } from "../src/services/customerSupabase";
-import { INITIAL_PROPOSAL_REVISION, mapProposalMetadata, SupabaseAdminProposalPairRepository, type ProposalPairRepository } from "../src/services/proposalPersistence";
+import { createCustomerProposalRepository, INITIAL_PROPOSAL_REVISION, mapProposalMetadata, ProposalPersistenceError, SupabaseAdminProposalPairRepository, type ProposalPairRepository } from "../src/services/proposalPersistence";
 import type { GeneratedProposal } from "../src/services/proposalGenerator";
 
 const customerId = "56beec8f-5031-44e9-b60c-576c1584042a";
@@ -303,6 +303,62 @@ test("RPC failure without a persisted pair returns a safe error", async () => {
     repository.persist({ customerId, requestId, revision: 1, recommendation: generated.recommendation, proposalFields: {}, proposal: generated }),
     { code: "PROPOSAL_PERSISTENCE_FAILED", message: "Proposals could not be saved safely." },
   );
+});
+
+test("an unapproved/missing workflow migration cannot trigger RunPod", async (context) => {
+  let generationCalls = 0;
+  const info = await listen(createPersistedProposalRouter({
+    env: { EVENTFLOW_AI_PERSISTENCE_ENABLED: "true" }, customers,
+    repository: {
+      findExisting: async () => null,
+      claimGeneration: async () => { throw new ProposalPersistenceError("WORKFLOW_NOT_READY", 503, "Migration approval required."); },
+      persist: async () => { throw new Error("Must not persist."); },
+    },
+    generator: { generate: async () => { generationCalls++; return generated; } },
+  }));
+  context.after(() => close(info.server));
+  const response = await post(info.url);
+  assert.equal(response.status, 503);
+  assert.equal((await response.json()).code, "WORKFLOW_NOT_READY");
+  assert.equal(generationCalls, 0);
+});
+
+test("concurrent customer retries share one generation and persistence operation", async (context) => {
+  let generationCalls = 0; let persistCalls = 0; let claims = 0;
+  const info = await listen(createPersistedProposalRouter({
+    env: { EVENTFLOW_AI_PERSISTENCE_ENABLED: "true" }, customers,
+    repository: {
+      findExisting: async () => null, claimGeneration: async () => { claims++; },
+      persist: async () => { persistCalls++; return persisted; },
+    },
+    generator: { generate: async () => {
+      generationCalls++;
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      return generated;
+    } },
+  }));
+  context.after(() => close(info.server));
+  const responses = await Promise.all([post(info.url), post(info.url), post(info.url)]);
+  assert.deepEqual(responses.map((response) => response.status), [200, 200, 200]);
+  assert.equal(generationCalls, 1); assert.equal(persistCalls, 1); assert.equal(claims, 1);
+});
+
+test("authenticated persistence uses the caller token and a lease, never a browser admin key", async () => {
+  const calls: { url: string; headers: Record<string, string>; body: Record<string, unknown> }[] = [];
+  const repository = createCustomerProposalRepository({
+    VITE_SUPABASE_URL: "https://example.supabase.co", VITE_SUPABASE_PUBLISHABLE_KEY: "test-public-key",
+  }, "customer-access-token", async (url, init) => {
+    calls.push({ url: String(url), headers: init?.headers as Record<string, string>, body: JSON.parse(String(init?.body)) });
+    return new Response(JSON.stringify(String(url).endsWith("eventflow_claim_generation") ? true : persisted), { status: 200 });
+  });
+  assert.ok(repository);
+  await repository.claimGeneration(requestId);
+  await repository.persist({ customerId, requestId, revision: 1, recommendation: generated.recommendation, proposalFields: {}, proposal: generated });
+  assert.match(calls[0]!.url, /eventflow_claim_generation$/);
+  assert.match(calls[1]!.url, /eventflow_persist_proposal_pair$/);
+  assert.equal(calls[0]!.body.p_token, calls[1]!.body.p_generation_token);
+  assert.equal(calls[1]!.headers.authorization, "Bearer customer-access-token");
+  assert.equal(calls[1]!.headers.apikey, "test-public-key");
 });
 
 test("Supabase admin repository never calls booking functions or event endpoints", async () => {
