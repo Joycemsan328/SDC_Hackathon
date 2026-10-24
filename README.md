@@ -26,7 +26,7 @@
 |---|---|
 | **GitHub Repository** | https://github.com/Joycemsan328/SDC_Hackathon.git |
 | **Replit Project** | https://event-flow-ai-customer-portal.replit.app/login |
-| **Live Demo** | [TO FILL] |
+| **Live Demo** | https://event-flow-ai-customer-portal.replit.app/login |
 | **RunPod Endpoint** | POST https://api.runpod.ai/v2/v14dit7fdqpt7v/runsync \ |
 | **Slide Deck** | https://canva.link/zw39x73wjp5g16i |
 | **Demo Video** | [TO FILL] |
