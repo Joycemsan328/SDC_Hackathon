@@ -115,7 +115,33 @@ Each proposal is designed to include:
 
 AI-generated proposals are subject to human review before being presented to customers.
 
----
+## Replit 
+Replit allowed our team to develop, integrate, test, and deploy the application in a collaborative environment.
+
+**How we used Replit:**
+- **Frontend Development:** Built the Customer Portal and Business Portal, including event requests, proposal reviews, and approval workflows.
+- **Backend Development:** Developed REST APIs using Node.js and Express to handle application requests, authentication, and AI proposal generation.
+- **Database Integration:** Connected Supabase to manage customer accounts, event requests, AI-generated proposals, and approval statuses.
+- **AI Integration:** Connected our backend to RunPod Serverless to generate personalized event proposals.
+- **Testing and Debugging:** Tested application workflows, API endpoints, and frontend-backend integration.
+- **Deployment:** Published EventFlow AI as a web application accessible through a browser.
+
+Replit served as the **central platform connecting our frontend, backend, database, and AI services**.
+
+## RunPod
+
+We used **RunPod Serverless** to provide the AI computing infrastructure for EventFlow AI.
+
+**How we used RunPod:**
+- **AI Model Hosting:** Configured a RunPod Serverless endpoint to run Qwen3-8B using vLLM.
+- **Automated Proposal Generation:** Sent structured event requirements from our backend to the AI model.
+- **Personalized Recommendations:** Generated proposals based on the customer's event type, budget, guest count, location, selected services, and additional requirements.
+- **Two Proposal Options:** Generated Plan A and Plan B, each containing suggested services, item descriptions, estimated prices, and total costs in MYR.
+- **Budget-Aware Planning:** Structured the AI output to consider the customer's specified budget.
+- **Human Review:** Allowed event planning businesses to review AI-generated proposals before approving them for customers.
+- **Proposal Refinement:** Supported the workflow for generating revised proposals when customers submit change requests.
+
+RunPod acts as the **AI inference engine**, while Replit hosts the application that sends requests and processes the generated results.
 
 ## 3. System Workflow
 
