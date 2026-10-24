@@ -28,7 +28,7 @@
 | **Replit Project** | https://event-flow-ai-customer-portal.replit.app/login |
 | **Live Demo** | [TO FILL] |
 | **RunPod Endpoint** | POST https://api.runpod.ai/v2/v14dit7fdqpt7v/runsync \ |
-| **Slide Deck** | https://canva.link/h5w7q7u1yc9a9sv |
+| **Slide Deck** | https://canva.link/zw39x73wjp5g16i |
 | **Demo Video** | [TO FILL] |
 
 ---
