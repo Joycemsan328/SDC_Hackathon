@@ -111,13 +111,15 @@ function readDemoPlanSelection(requestId: string, customerId: string, revision?:
     return undefined;
   }
 }
-function writeDemoPlanSelection(requestId: string, customerId: string, planKey: "A" | "B", revision?: string): void {
+function writeDemoPlanSelection(requestId: string, customerId: string, planKey: "A" | "B", revision?: string): boolean {
   try {
     const parsed = JSON.parse(localStorage.getItem(OPTION_B_DEMO_SELECTIONS_KEY) || "{}") as Record<string, DemoPlanSelection>;
     parsed[requestId] = { customerId, planKey, revision, selectedAt: new Date().toISOString() };
     localStorage.setItem(OPTION_B_DEMO_SELECTIONS_KEY, JSON.stringify(parsed));
+    return true;
   } catch {
     // The selected plan remains available in the current portal session.
+    return false;
   }
 }
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -146,37 +148,37 @@ function mapGeneratedPlans(recommendation: string, plans: GeneratedProposalRespo
 }
 function mapPersistedPlan(value: unknown, expectedId: "A" | "B"): GeneratedProposalResponse["plans"][number] {
   if (!isRecord(value) || value.id !== expectedId || typeof value.title !== "string"
-    || typeof value.concept !== "string" || typeof value.theme !== "string" || !Array.isArray(value.timeline)
-    || !isRecord(value.venue) || typeof value.venue.name !== "string" || typeof value.venue.setup !== "string"
-    || typeof value.catering !== "string" || !Array.isArray(value.services) || !Array.isArray(value.costBreakdown)
-    || typeof value.totalEstimatedMYR !== "number" || !Number.isFinite(value.totalEstimatedMYR)
-    || !Array.isArray(value.assumptions) || !Array.isArray(value.unconfirmedCosts)) {
+    || !Array.isArray(value.costBreakdown)
+    || value.totalEstimatedMYR === null || value.totalEstimatedMYR === ""
+    || !Number.isFinite(Number(value.totalEstimatedMYR))) {
     throw new Error(`Saved Plan ${expectedId} is incomplete and cannot be displayed safely.`);
   }
-  const timeline = value.timeline.flatMap((item) => isRecord(item) && typeof item.time === "string" && typeof item.activity === "string"
+  const savedTimeline = Array.isArray(value.timeline) ? value.timeline : [];
+  const timeline = savedTimeline.flatMap((item) => isRecord(item) && typeof item.time === "string" && typeof item.activity === "string"
     ? [{ time: item.time, activity: item.activity }]
     : []);
   const costBreakdown = value.costBreakdown.flatMap((item) => {
-    if (!isRecord(item) || typeof item.item !== "string" || typeof item.description !== "string") return [];
+    if (!isRecord(item) || typeof item.item !== "string" || typeof item.description !== "string"
+      || item.amountMYR === null || item.amountMYR === "") return [];
     const amountMYR = typeof item.amountMYR === "number" ? item.amountMYR : Number(item.amountMYR);
     return Number.isFinite(amountMYR) ? [{ item: item.item, description: item.description, amountMYR }] : [];
   });
-  if (timeline.length !== value.timeline.length || costBreakdown.length !== value.costBreakdown.length) {
+  if (timeline.length !== savedTimeline.length || costBreakdown.length !== value.costBreakdown.length) {
     throw new Error(`Saved Plan ${expectedId} contains incomplete timeline or price details.`);
   }
   return {
     id: expectedId,
     title: value.title,
-    concept: value.concept,
-    theme: value.theme,
+    concept: typeof value.concept === "string" ? value.concept : "No concept provided.",
+    theme: typeof value.theme === "string" ? value.theme : "Not specified",
     timeline,
-    venue: { name: value.venue.name, setup: value.venue.setup },
-    catering: value.catering,
-    services: value.services.filter((item): item is string => typeof item === "string"),
+    venue: { name: isRecord(value.venue) && typeof value.venue.name === "string" ? value.venue.name : "To be confirmed", setup: isRecord(value.venue) && typeof value.venue.setup === "string" ? value.venue.setup : "Not specified" },
+    catering: typeof value.catering === "string" ? value.catering : "Not specified",
+    services: Array.isArray(value.services) ? value.services.filter((item): item is string => typeof item === "string") : [],
     costBreakdown,
-    totalEstimatedMYR: value.totalEstimatedMYR,
-    assumptions: value.assumptions.filter((item): item is string => typeof item === "string"),
-    unconfirmedCosts: value.unconfirmedCosts.filter((item): item is string => typeof item === "string"),
+    totalEstimatedMYR: Number(value.totalEstimatedMYR),
+    assumptions: Array.isArray(value.assumptions) ? value.assumptions.filter((item): item is string => typeof item === "string") : [],
+    unconfirmedCosts: Array.isArray(value.unconfirmedCosts) ? value.unconfirmedCosts.filter((item): item is string => typeof item === "string") : [],
   };
 }
 function mapSavedRequest(row: SupabaseCustomerRequestRow, proposalRows: SupabaseCustomerProposalRow[], customerId: string): CustomerEvent {
@@ -186,7 +188,7 @@ function mapSavedRequest(row: SupabaseCustomerRequestRow, proposalRows: Supabase
   const noteBody = locationMatch ? notes.slice(locationMatch[0].length).replace(/^\s*\n?/, "").replace(/^\s*\n?/, "") : notes;
   const metadata = /^EventFlow request metadata v1:\r?\nTheme:\s*([^\r\n]*)(?:\r?\n\r?\n([\s\S]*))?$/.exec(noteBody);
   const theme = metadata?.[1]?.trim() ?? "";
-  const requirements = (metadata ? metadata[2] : noteBody).trim();
+  const requirements = (metadata ? metadata[2] ?? "" : noteBody).trim();
   const validServices: Service[] = ["Catering", "Decoration", "Photography", "Venue Setup", "Equipment"];
   const services = Array.isArray(row.services)
     ? row.services.filter((service): service is Service => typeof service === "string" && validServices.includes(service as Service))
@@ -211,16 +213,14 @@ function mapSavedRequest(row: SupabaseCustomerRequestRow, proposalRows: Supabase
     const byPlan = new Map(pair.map((item) => [item.plan_key as "A" | "B", item]));
     const planArow = byPlan.get("A")!;
     const planBrow = byPlan.get("B")!;
-    if (typeof planArow.recommendation !== "string" || typeof planBrow.recommendation !== "string") {
-      throw new Error("The saved proposal pair is missing its recommendation.");
-    }
     const plans = mapGeneratedPlans(
-      planArow.recommendation,
+      planArow.recommendation ?? planBrow.recommendation ?? "No recommendation provided.",
       [mapPersistedPlan(planArow.plan_content, "A"), mapPersistedPlan(planBrow.plan_content, "B")],
     );
     const statuses = pair.map((item) => item.status);
     if (statuses.every((item) => item === "Changes Requested")) status = "Changes Requested";
     else if (statuses.every((item) => item === "Customer Accepted")) status = "Customer Accepted";
+    else if (statuses.every((item) => item === "Approved for Customer")) status = "Approved for Customer";
     // Legacy "Awaiting Customer" pairs are deliberately still awaiting the
     // customer's Option B selection; they are not treated as approved here.
     else status = "Pending Business Approval";
@@ -228,7 +228,7 @@ function mapSavedRequest(row: SupabaseCustomerRequestRow, proposalRows: Supabase
       plans,
       updatedAt: row.created_at ?? new Date().toISOString(),
       source: "persisted-ai",
-      workflowStatus: status === "Changes Requested" ? "Changes Requested" : "Pending Business Approval",
+      workflowStatus: status === "Changes Requested" ? "Changes Requested" : status === "Approved for Customer" ? "Approved for Customer" : "Pending Business Approval",
       proposalIds: { A: planArow.id, B: planBrow.id },
       revision: newestRevision || undefined,
     };
@@ -358,13 +358,14 @@ export const apiProposalService: ProposalService = {
 type CustomerState = {
   user: { id: string; name: string; email: string } | null; authLoading: boolean; events: CustomerEvent[]; changeRequests: ChangeRequest[];
   remoteLoading: boolean; remoteError: string;
+  reloadSavedEvents: () => void;
   signIn: (email: string, password: string, registering?: boolean, fullName?: string) => Promise<{ error?: string; message?: string; signedIn: boolean }>;
   signOut: () => Promise<void>;
   createRequest: (event: ProposalGenerationInput) => Promise<string>;
   addEvent: (event: Omit<CustomerEvent, "id" | "createdAt" | "status" | "proposal" | "acceptedPlanId" | "requestSource">, id: string, requestSource: "demo" | "supabase") => void;
   generateProposal: (id: string, input: ProposalGenerationInput, requestSource?: "demo" | "supabase") => Promise<void>;
   acceptProposal: (id: string, planId: "A" | "B") => void;
-  preferProposal: (id: string, planId: "A" | "B") => void;
+  preferProposal: (id: string, planId: "A" | "B") => { error?: string; stored?: boolean };
   requestChanges: (id: string, message: string) => void;
 };
 type PersistedState = Pick<CustomerState, "events" | "changeRequests">;
@@ -434,6 +435,7 @@ export function CustomerProvider({ children }: { children: ReactNode }) {
   const [authLoading, setAuthLoading] = useState(true);
   const [remoteLoading, setRemoteLoading] = useState(false);
   const [remoteError, setRemoteError] = useState("");
+  const [reloadVersion, setReloadVersion] = useState(0);
   useEffect(() => {
     try {
       const demoState = { ...state, events: state.events.filter((event) => event.requestSource !== "supabase") };
@@ -572,8 +574,9 @@ export function CustomerProvider({ children }: { children: ReactNode }) {
     })();
 
     return () => { active = false; };
-  }, [user?.id]);
+  }, [user?.id, reloadVersion]);
   const value = useMemo<CustomerState>(() => ({ ...state, user, authLoading, remoteLoading, remoteError,
+    reloadSavedEvents: () => setReloadVersion((version) => version + 1),
     signIn: async (email, password, registering = false, fullName = "") => {
       const trimmedEmail = email.trim();
       if (!trimmedEmail || !/^\S+@\S+\.\S+$/.test(trimmedEmail)) return { error: "Enter a valid email address.", signedIn: false };
@@ -685,15 +688,16 @@ if (existing?.proposal) {
     // Demo-only selection is shared with the Business Portal through this
     // browser's localStorage. It never updates Supabase proposal records.
     preferProposal: (id, planId) => {
-      if (!user) return;
+      if (!user) return { error: "Sign in before selecting a saved plan." };
       const event = state.events.find((item) => item.id === id);
       if (!event || event.requestSource !== "supabase" || event.proposal?.source !== "persisted-ai"
-        || event.status !== "Pending Business Approval" || !event.proposal.plans.some((plan) => plan.id === planId)) return;
-      writeDemoPlanSelection(id, user.id, planId, event.proposal.revision);
+        || event.status === "Customer Accepted" || !event.proposal.plans.some((plan) => plan.id === planId)) return { error: "This saved plan is not available for selection. Reload your saved events and try again." };
+      const stored = writeDemoPlanSelection(id, user.id, planId, event.proposal.revision);
       setState((current) => ({
         ...current,
         events: current.events.map((item) => item.id === id ? { ...item, preferredPlanId: planId } : item),
       }));
+      return { stored };
     },
     acceptProposal: (id, planId) => setState((current) => ({ ...current, events: current.events.map((event) => event.id === id && event.status === "Approved for Customer" && event.proposal?.plans.some((plan) => plan.id === planId) ? { ...event, status: "Customer Accepted", acceptedPlanId: planId } : event) })),
     requestChanges: (id, message) => setState((current) => {
