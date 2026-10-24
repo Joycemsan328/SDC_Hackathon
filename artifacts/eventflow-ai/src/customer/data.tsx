@@ -34,6 +34,7 @@ export type CustomerEvent = {
   id: string; name: string; type: string; date: string; location: string; guests: number;
   budget: number; theme: string; services: Service[]; requirements: string;
   status: EventStatus; createdAt: string; proposal?: EventProposal; acceptedPlanId?: "A" | "B"; preferredPlanId?: "A" | "B"; requestSource?: "demo" | "supabase";
+  proposalLookup?: { state: "ready" | "empty" | "error"; rowCount: number; message?: string };
 };
 export type ChangeRequest = { id: string; eventId: string; message: string; createdAt: string };
 export type ProposalGenerationInput = Pick<CustomerEvent, "name" | "type" | "date" | "location" | "guests" | "budget" | "theme" | "services" | "requirements">;
@@ -232,8 +233,8 @@ function mapSavedRequest(row: SupabaseCustomerRequestRow, proposalRows: Supabase
       proposalIds: { A: planArow.id, B: planBrow.id },
       revision: newestRevision || undefined,
     };
-  } else if (proposalRows.some((item) => item.plan_key === "A" || item.plan_key === "B")) {
-    throw new Error("The saved proposal pair is incomplete; both plans are required.");
+  } else if (proposalRows.length) {
+    throw new Error(`Found ${proposalRows.length} saved proposal row(s), but no complete Plan A/Plan B pair for the latest revision. Check plan_key, revision, and plan_content on these existing records.`);
   }
   const createdAt = row.created_at ?? new Date().toISOString();
   return {
@@ -250,6 +251,7 @@ function mapSavedRequest(row: SupabaseCustomerRequestRow, proposalRows: Supabase
     status,
     createdAt,
     proposal,
+    proposalLookup: { state: proposal ? "ready" : "empty", rowCount: proposalRows.length },
     preferredPlanId: readDemoPlanSelection(row.id, customerId, proposal?.revision),
     requestSource: "supabase",
   };
@@ -554,12 +556,27 @@ export function CustomerProvider({ children }: { children: ReactNode }) {
         const hydrated = requestRows
           .filter((row) => row.customer_id === user.id)
           .map((row) => {
+            const rows = proposalsByRequest.get(row.id) ?? [];
+            let event: CustomerEvent;
             try {
-              return mapSavedRequest(row, proposalsByRequest.get(row.id) ?? [], user.id);
-            } catch {
+              if (proposalError) throw new Error(proposalError);
+              event = mapSavedRequest(row, rows, user.id);
+            } catch (error) {
               invalidPair = true;
-              return mapSavedRequest(row, [], user.id);
+              event = {
+                ...mapSavedRequest(row, [], user.id),
+                proposalLookup: { state: "error", rowCount: rows.length, message: error instanceof Error ? error.message : "Saved plans could not be read." },
+              };
             }
+            if (import.meta.env.DEV) console.info("EventFlow saved proposal lookup", {
+              requestId: row.id,
+              query: "proposals.request_id = requests.id",
+              rowCount: rows.length,
+              plans: rows.map((item) => ({ planKey: item.plan_key, revision: item.revision })),
+              outcome: event.proposalLookup?.state,
+              error: event.proposalLookup?.message,
+            });
+            return event;
           });
         setState((current) => ({
           ...current,

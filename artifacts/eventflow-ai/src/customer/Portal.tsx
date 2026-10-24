@@ -228,14 +228,11 @@ function DetailSection({ icon, title, children }: { icon: ReactNode; title: stri
   return <section className="ef-card rounded-2xl p-5 sm:p-6"><div className="mb-4 flex items-center gap-3"><div className="flex h-9 w-9 items-center justify-center rounded-xl bg-[#f6edf3] text-[#a16e8a]">{icon}</div><h2 className="text-base font-bold text-[#574d5d]">{title}</h2></div>{children}</section>;
 }
 function EventDetail({ id }: { id?: string }) {
-  const { events, changeRequests, acceptProposal, preferProposal, requestChanges, generateProposal, remoteLoading, remoteError } = useCustomer();
+  const { events, changeRequests, acceptProposal, preferProposal, requestChanges, remoteLoading, remoteError, reloadSavedEvents } = useCustomer();
   const [, setLocation] = useLocation();
   const [showChangeForm, setShowChangeForm] = useState(false);
   const [changeText, setChangeText] = useState('');
   const [feedback, setFeedback] = useState('');
-  const [generationError, setGenerationError] = useState('');
-  const [isGeneratingProposal, setIsGeneratingProposal] = useState(false);
-  const generationInFlight = useRef(false);
   const event = events.find((item) => item.id === id);
   const requests = changeRequests.filter((request) => request.eventId === id);
   if (!event && remoteLoading) return <div role="status" className="ef-card rounded-2xl p-10 text-center text-sm text-[#817886]">Loading your saved event and plans…</div>;
@@ -243,31 +240,6 @@ function EventDetail({ id }: { id?: string }) {
   const isAiDraft = event.status === 'AI Draft' && event.proposal?.source === 'ai-service';
   const isPendingBusinessApproval = event.status === 'Pending Business Approval' && event.proposal?.source === 'persisted-ai';
   const canViewProposal = Boolean(event.proposal);
-  const handleGenerateProposal = async () => {
-    if (generationInFlight.current || event.requestSource !== 'supabase' || event.proposal) return;
-    generationInFlight.current = true;
-    setIsGeneratingProposal(true);
-    setGenerationError('');
-    try {
-      await generateProposal(event.id, {
-        name: event.name,
-        type: event.type,
-        date: event.date,
-        location: event.location,
-        guests: event.guests,
-        budget: event.budget,
-        theme: event.theme,
-        services: event.services,
-        requirements: event.requirements,
-      }, 'supabase');
-      setFeedback('Plan A and Plan B have been generated. Review the saved drafts below.');
-    } catch (error) {
-      setGenerationError(error instanceof Error ? error.message : 'Could not generate the proposal. Please try again later.');
-    } finally {
-      generationInFlight.current = false;
-      setIsGeneratingProposal(false);
-    }
-  };
   const handleAccept = (planId: 'A' | 'B') => { acceptProposal(event.id, planId); setFeedback(`Plan ${planId} accepted. Your planner will be in touch with the next steps.`); };
   const submitChanges = (formEvent: FormEvent) => { formEvent.preventDefault(); if (!changeText.trim() || event.status === 'Customer Accepted') return; requestChanges(event.id, changeText.trim()); setShowChangeForm(false); setChangeText(''); setFeedback('Update saved in this demo. Your original request and proposal history have not been overwritten.'); };
   return <div className="ef-enter">
@@ -278,13 +250,10 @@ function EventDetail({ id }: { id?: string }) {
       <div className="rounded-xl border border-[#eee6ed] bg-white px-4 py-3"><div className="text-[10px] font-bold uppercase tracking-[.12em] text-[#a198a4]">Your budget</div><div className="mt-1 text-base font-extrabold text-[#5b4f60]" data-testid="text-event-budget">{money(event.budget)}</div></div>
     </div>
     {feedback && <div role="status" className="mb-5 flex items-start gap-2 rounded-xl border border-[#d6e8dc] bg-[#f2f8f4] px-4 py-3 text-sm text-[#56765f]" data-testid="status-action-feedback"><CheckCircle2 size={17} className="mt-0.5 shrink-0" />{feedback}<button className="ml-auto" onClick={() => setFeedback('')} aria-label="Dismiss"><X size={15} /></button></div>}
-    {!canViewProposal && <div className="mb-5 rounded-2xl border border-[#eadfc8] bg-[#fbf6eb] p-5 sm:p-6"><div className="flex gap-3"><div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white text-[#aa8954]"><Clock3 size={17} /></div><div><h2 className="text-sm font-bold text-[#66583e]">{event.status === 'Changes Requested' ? 'Your update is awaiting review.' : event.status === 'AI Draft' ? 'Your request is being shaped.' : 'Your planner is reviewing your request.'}</h2><p className="mt-1 max-w-2xl text-xs leading-relaxed text-[#8f805f]">{event.status === 'Changes Requested' ? 'Your latest requirements are saved. Proposal options will be available after business review and approval.' : 'Your AI proposal will appear here once it has been generated and saved. You can review the draft before business approval.'}</p></div></div></div>}
-    {!canViewProposal && event.requestSource === 'supabase' && !remoteLoading && !remoteError && <div className="mb-5 rounded-2xl border border-[#e9dce5] bg-white p-5 sm:p-6">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div><h2 className="text-sm font-bold text-[#574d5d]">Generate your AI proposal</h2><p className="mt-1 text-xs leading-relaxed text-[#8b818e]">Generate Plan A and Plan B for this saved event. This may use RunPod credits.</p></div>
-        <Button type="button" disabled={isGeneratingProposal} onClick={() => void handleGenerateProposal()} data-testid="button-generate-persisted-proposal"><Sparkles size={16} />{isGeneratingProposal ? 'Generating Plan A & B…' : 'Generate AI Proposal'}</Button>
-      </div>
-      {generationError && <p role="alert" className="mt-3 rounded-xl border border-[#efcfd1] bg-[#fff4f4] px-4 py-3 text-sm text-[#a34e58]" data-testid="status-proposal-generation-error">{generationError}</p>}
+    {!canViewProposal && <div role={event.proposalLookup?.state === 'error' ? 'alert' : 'status'} className="mb-5 rounded-2xl border border-[#eadfc8] bg-[#fbf6eb] p-5 sm:p-6" data-testid="status-saved-proposal"><div className="flex gap-3"><div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white text-[#aa8954]"><Clock3 size={17} /></div><div><h2 className="text-sm font-bold text-[#66583e]">{remoteLoading ? 'Checking saved proposals…' : event.proposalLookup?.state === 'error' ? 'Saved proposals could not be displayed' : 'No proposal generated yet'}</h2><p className="mt-1 max-w-2xl text-xs leading-relaxed text-[#8f805f]">{remoteLoading ? 'Reading existing Plan A/B records. No generation is triggered.' : event.proposalLookup?.state === 'error' ? event.proposalLookup.message : 'No saved Plan A/B records were returned for this request. If your planner has already saved them, check customer read permissions and the proposal request ID. Nothing has been generated or overwritten.'}</p></div></div></div>}
+    {event.requestSource === 'supabase' && <div className="mb-5 rounded-2xl border border-[#e9dce5] bg-white p-5 sm:p-6" data-testid="status-proposal-lookup-details">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><p className="break-all text-xs text-[#8b818e]">Request ID: {event.id}</p><p className="mt-1 text-xs text-[#8b818e]">{remoteLoading ? 'Checking…' : `${event.proposalLookup?.rowCount ?? 0} saved proposal row(s) returned for this request.`} Lookup: proposals.request_id = requests.id.</p></div><Button type="button" variant="outline" disabled={remoteLoading} onClick={reloadSavedEvents} data-testid="button-check-saved-proposals">{remoteLoading ? 'Checking…' : 'Check saved proposals'}</Button></div>
+      {!canViewProposal && events.some((item) => item.id !== event.id && item.requestSource === 'supabase' && item.proposal?.source === 'persisted-ai') && <div className="mt-4 border-t border-[#f0eaf0] pt-4"><p className="mb-2 text-xs text-[#8b818e]">Saved Plan A/B are available for a different event request:</p>{events.filter((item) => item.id !== event.id && item.requestSource === 'supabase' && item.proposal?.source === 'persisted-ai').map((item) => <Link key={item.id} href={`/events/${item.id}`} className="mt-2 flex items-center gap-2 text-sm font-semibold text-[#a66b89] hover:underline" data-testid={`link-saved-plan-event-${item.id}`}>{item.name} — view saved Plan A/B <ArrowRight size={14} /></Link>)}</div>}
     </div>}
     <div className="grid gap-4 lg:grid-cols-[1fr_340px]">
       <div className="space-y-4">

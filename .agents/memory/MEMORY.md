@@ -1,0 +1,1 @@
+- [Saved proposal verification](saved-proposal-verification.md) — distinguish authenticated empty results from lookup/mapping failures; never regenerate to resolve a read failure.
