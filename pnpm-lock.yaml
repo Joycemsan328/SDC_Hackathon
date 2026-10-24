@@ -224,6 +224,10 @@ importers:
         version: 4.23.13
 
   artifacts/eventflow-ai:
+    dependencies:
+      '@supabase/supabase-js':
+        specifier: ^2.118.0
+        version: 2.118.0
     devDependencies:
       '@hookform/resolvers':
         specifier: ^3.10.0

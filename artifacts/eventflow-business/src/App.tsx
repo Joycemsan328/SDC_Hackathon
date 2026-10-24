@@ -82,8 +82,146 @@ type Req = {
   services: string[];
   notes: string;
   status: RequestStatus;
+  source?: "demo" | "supabase";
 };
+type SupabaseRequestRow = {
+  id: string;
+  customer_name: string | null;
+  email: string | null;
+  phone: string | null;
+  event_name: string | null;
+  event_type: string | null;
+  event_date: string | null;
+  event_time: string | null;
+  guests: number | string | null;
+  budget: number | string | null;
+  services: unknown;
+  notes: string | null;
+  status: string | null;
+};
+const requestStatuses: RequestStatus[] = [
+  "New", "Under Review", "Proposal Ready", "Pending Approval", "Approved", "Completed",
+];
+function requestNumber(value: number | string | null): number {
+  const parsed = typeof value === "number" ? value : typeof value === "string" ? Number(value) : 0;
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+function mapSupabaseRequest(row: SupabaseRequestRow): Req {
+  const services = Array.isArray(row.services)
+    ? row.services.filter((service): service is string => typeof service === "string")
+    : [];
+  const status = row.status && requestStatuses.includes(row.status as RequestStatus)
+    ? row.status as RequestStatus
+    : "New";
+  return {
+    id: row.id,
+    customer: row.customer_name?.trim() || "Customer",
+    email: row.email?.trim() || "",
+    phone: row.phone?.trim() || "",
+    type: row.event_type?.trim() || "Event",
+    name: row.event_name?.trim() || "Untitled event",
+    date: row.event_date || "",
+    time: row.event_time || "",
+    guests: requestNumber(row.guests),
+    budget: requestNumber(row.budget),
+    services,
+    notes: row.notes?.trim() || "",
+    status,
+    source: "supabase",
+  };
+}
+function asObject(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+function mapProposalPlanContent(value: unknown): ProposalPlanContent | undefined {
+  const raw = asObject(value);
+  if (!raw) return undefined;
+  const venue = asObject(raw.venue);
+  const timeline = Array.isArray(raw.timeline)
+    ? raw.timeline.flatMap((item) => {
+        const row = asObject(item);
+        return typeof row?.time === "string" && typeof row.activity === "string"
+          ? [{ time: row.time, activity: row.activity }]
+          : [];
+      })
+    : undefined;
+  const costBreakdown = Array.isArray(raw.costBreakdown)
+    ? raw.costBreakdown.flatMap((item) => {
+        const row = asObject(item);
+        const amount = typeof row?.amountMYR === "number" ? row.amountMYR : Number(row?.amountMYR);
+        return typeof row?.item === "string" && typeof row.description === "string" && Number.isFinite(amount)
+          ? [{ item: row.item, description: row.description, amountMYR: amount }]
+          : [];
+      })
+    : undefined;
+  const id = raw.id === "A" || raw.id === "B" ? raw.id : undefined;
+  return {
+    id,
+    title: typeof raw.title === "string" ? raw.title : undefined,
+    concept: typeof raw.concept === "string" ? raw.concept : undefined,
+    theme: typeof raw.theme === "string" ? raw.theme : undefined,
+    timeline,
+    venue: typeof venue?.name === "string" && typeof venue.setup === "string"
+      ? { name: venue.name, setup: venue.setup }
+      : undefined,
+    catering: typeof raw.catering === "string" ? raw.catering : undefined,
+    services: Array.isArray(raw.services) ? raw.services.filter((item): item is string => typeof item === "string") : undefined,
+    costBreakdown,
+    totalEstimatedMYR: typeof raw.totalEstimatedMYR === "number" && Number.isFinite(raw.totalEstimatedMYR)
+      ? raw.totalEstimatedMYR
+      : undefined,
+    assumptions: Array.isArray(raw.assumptions) ? raw.assumptions.filter((item): item is string => typeof item === "string") : undefined,
+    unconfirmedCosts: Array.isArray(raw.unconfirmedCosts) ? raw.unconfirmedCosts.filter((item): item is string => typeof item === "string") : undefined,
+  };
+}
+function mapSupabaseProposal(row: SupabaseProposalRow, lineRows: SupabaseProposalLineRow[]): Proposal {
+  const planContent = mapProposalPlanContent(row.plan_content);
+  const checklist = asObject(row.checklist);
+  return {
+    id: row.id,
+    requestId: row.request_id,
+    customer: row.customer_name?.trim() || "Customer",
+    event: planContent?.title || row.event_name?.trim() || "Untitled event",
+    date: row.event_date || "",
+    type: row.event_type?.trim() || "Event",
+    budget: requestNumber(row.budget),
+    lines: lineRows.map((line) => ({
+      service: line.service?.trim() || "Service",
+      qty: line.qty && line.qty > 0 ? line.qty : 1,
+      price: requestNumber(line.price),
+    })),
+    recommendation: row.recommendation?.trim() || "No recommendation was saved.",
+    status: row.status?.trim() || "Draft",
+    checklist: {
+      budget: checklist?.budget === true,
+      supplier: checklist?.supplier === true,
+      schedule: checklist?.schedule === true,
+      reviewed: checklist?.reviewed === true,
+    },
+    revision: row.revision || undefined,
+    source: "supabase",
+    planKey: row.plan_key === "A" || row.plan_key === "B" ? row.plan_key : undefined,
+    planContent,
+  };
+}
 type Line = { service: string; qty: number; price: number };
+type ProposalCostItem = { item: string; description: string; amountMYR: number };
+type ProposalPlanContent = {
+  id?: "A" | "B";
+  title?: string;
+  concept?: string;
+  theme?: string;
+  timeline?: { time: string; activity: string }[];
+  venue?: { name: string; setup: string };
+  catering?: string;
+  services?: string[];
+  costBreakdown?: ProposalCostItem[];
+  totalEstimatedMYR?: number;
+  assumptions?: string[];
+  unconfirmedCosts?: string[];
+};
 type Proposal = {
   id: string;
   requestId: string;
@@ -102,6 +240,31 @@ type Proposal = {
     reviewed: boolean;
   };
   revision?: string;
+  source?: "demo" | "supabase";
+  planKey?: "A" | "B";
+  planContent?: ProposalPlanContent;
+};
+type SupabaseProposalRow = {
+  id: string;
+  request_id: string;
+  customer_name: string | null;
+  event_name: string | null;
+  event_date: string | null;
+  event_type: string | null;
+  budget: number | string | null;
+  recommendation: string | null;
+  status: string | null;
+  checklist: unknown;
+  revision: string | null;
+  plan_key: string | null;
+  plan_content: unknown;
+};
+type SupabaseProposalLineRow = {
+  id: string;
+  proposal_id: string;
+  service: string | null;
+  qty: number | null;
+  price: number | string | null;
 };
 type EventItem = {
   id: string;
@@ -427,16 +590,18 @@ const dateLabel = (
     month: "short",
     year: "numeric",
   },
-) => new Date(`${v}T12:00:00`).toLocaleDateString("en-MY", opts);
+) => v && !Number.isNaN(new Date(`${v}T12:00:00`).getTime())
+  ? new Date(`${v}T12:00:00`).toLocaleDateString("en-MY", opts)
+  : "Not provided";
 function loadStore(): Store {
   try {
     const saved = localStorage.getItem(DB_KEY);
     if (!saved) return seed;
     const parsed = JSON.parse(saved) as Partial<Store>;
     return {
-      requests: Array.isArray(parsed.requests)
+      requests: (Array.isArray(parsed.requests)
         ? parsed.requests
-        : seed.requests,
+        : seed.requests).map((request) => ({ ...request, source: "demo" as const })),
       proposals: Array.isArray(parsed.proposals)
         ? parsed.proposals
         : seed.proposals,
@@ -490,6 +655,12 @@ const queryClient = new QueryClient();
 
 function App() {
   const [store, setStore] = useState<Store>(loadStore);
+  const [supabaseRequests, setSupabaseRequests] = useState<Req[]>([]);
+  const [requestFetchState, setRequestFetchState] = useState<"idle" | "loading" | "loaded" | "error">("idle");
+  const [requestFetchError, setRequestFetchError] = useState("");
+  const [supabaseProposals, setSupabaseProposals] = useState<Proposal[]>([]);
+  const [proposalFetchState, setProposalFetchState] = useState<"idle" | "loading" | "loaded" | "error">("idle");
+  const [proposalFetchError, setProposalFetchError] = useState("");
   const [session, setSession] = useState<Session | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [isStaff, setIsStaff] = useState(false);
@@ -554,6 +725,109 @@ function App() {
       listener.subscription.unsubscribe();
     };
   }, []);
+  const staffUserId = isStaff ? session?.user.id : undefined;
+  useEffect(() => {
+    if (authLoading) return;
+    if (!staffUserId) {
+      setSupabaseRequests([]);
+      setRequestFetchError("");
+      setRequestFetchState("idle");
+      return;
+    }
+
+    let active = true;
+    setRequestFetchState("loading");
+    setRequestFetchError("");
+
+    void (async () => {
+      try {
+        const { data, error } = await supabase
+          .from("requests")
+          .select("id, customer_name, email, phone, event_name, event_type, event_date, event_time, guests, budget, services, notes, status")
+          .order("created_at", { ascending: false, nullsFirst: false });
+        if (!active) return;
+        if (error) {
+          setSupabaseRequests([]);
+          setRequestFetchError(error.message);
+          setRequestFetchState("error");
+          return;
+        }
+        setSupabaseRequests(((data ?? []) as SupabaseRequestRow[]).map(mapSupabaseRequest));
+        setRequestFetchState("loaded");
+      } catch (error: unknown) {
+        if (!active) return;
+        setSupabaseRequests([]);
+        setRequestFetchError(error instanceof Error ? error.message : "Unexpected request loading error.");
+        setRequestFetchState("error");
+      }
+    })();
+
+    return () => { active = false; };
+  }, [authLoading, staffUserId]);
+  useEffect(() => {
+    if (authLoading) return;
+    if (!staffUserId) {
+      setSupabaseProposals([]);
+      setProposalFetchError("");
+      setProposalFetchState("idle");
+      return;
+    }
+
+    let active = true;
+    setProposalFetchState("loading");
+    setProposalFetchError("");
+
+    void (async () => {
+      try {
+        const { data, error } = await supabase
+          .from("proposals")
+          .select("id, request_id, customer_name, event_name, event_date, event_type, budget, recommendation, status, checklist, revision, plan_key, plan_content")
+          .order("created_at", { ascending: false, nullsFirst: false });
+        if (!active) return;
+        if (error) {
+          setSupabaseProposals([]);
+          setProposalFetchError(error.message);
+          setProposalFetchState("error");
+          return;
+        }
+
+        const rows = (data ?? []) as SupabaseProposalRow[];
+        if (!rows.length) {
+          setSupabaseProposals([]);
+          setProposalFetchState("loaded");
+          return;
+        }
+        const proposalIds = rows.map((row) => row.id);
+        const { data: lineData, error: lineError } = await supabase
+          .from("proposal_lines")
+          .select("id, proposal_id, service, qty, price")
+          .in("proposal_id", proposalIds);
+        if (!active) return;
+        if (lineError) {
+          setSupabaseProposals([]);
+          setProposalFetchError(lineError.message);
+          setProposalFetchState("error");
+          return;
+        }
+
+        const linesByProposal = new Map<string, SupabaseProposalLineRow[]>();
+        for (const line of (lineData ?? []) as SupabaseProposalLineRow[]) {
+          const lines = linesByProposal.get(line.proposal_id) ?? [];
+          lines.push(line);
+          linesByProposal.set(line.proposal_id, lines);
+        }
+        setSupabaseProposals(rows.map((row) => mapSupabaseProposal(row, linesByProposal.get(row.id) ?? [])));
+        setProposalFetchState("loaded");
+      } catch (error: unknown) {
+        if (!active) return;
+        setSupabaseProposals([]);
+        setProposalFetchError(error instanceof Error ? error.message : "Unexpected proposal loading error.");
+        setProposalFetchState("error");
+      }
+    })();
+
+    return () => { active = false; };
+  }, [authLoading, staffUserId]);
   useEffect(() => {
     async function testConnection() {
       const { data, error } = await supabase
@@ -574,6 +848,25 @@ function App() {
   const [notice, setNotice] = useState("");
   const [mobileNav, setMobileNav] = useState(false);
   const [location, setLocation] = useLocation();
+  const requestsForViews = useMemo(() => {
+    const merged = new Map<string, Req>();
+    for (const request of supabaseRequests) merged.set(request.id, { ...request, source: "supabase" });
+    for (const request of store.requests) {
+      if (!merged.has(request.id)) merged.set(request.id, { ...request, source: "demo" });
+    }
+    return Array.from(merged.values());
+  }, [store.requests, supabaseRequests]);
+  const requestViewStore = useMemo(() => ({ ...store, requests: requestsForViews }), [store, requestsForViews]);
+  const proposalsForViews = useMemo(() => {
+    const merged = new Map<string, Proposal>();
+    for (const proposal of supabaseProposals) merged.set(proposal.id, { ...proposal, source: "supabase" });
+    for (const proposal of store.proposals) {
+      if (!merged.has(proposal.id)) merged.set(proposal.id, { ...proposal, source: "demo" });
+    }
+    return Array.from(merged.values());
+  }, [store.proposals, supabaseProposals]);
+  const proposalViewStore = useMemo(() => ({ ...requestViewStore, proposals: proposalsForViews }), [requestViewStore, proposalsForViews]);
+  const showRequestFetchStatus = requestFetchState !== "idle";
   useEffect(() => {
     try {
       localStorage.setItem(DB_KEY, JSON.stringify(store));
@@ -587,11 +880,16 @@ function App() {
     setNotice(s);
     window.setTimeout(() => setNotice(""), 2600);
   };
-  const updateRequest = (id: string, patch: Partial<Req>) =>
+  const updateRequest = (id: string, patch: Partial<Req>) => {
+    if (supabaseRequests.some((request) => request.id === id)) {
+      flash("Saved requests are read-only in this version.");
+      return;
+    }
     setStore((s) => ({
       ...s,
       requests: s.requests.map((r) => (r.id === id ? { ...r, ...patch } : r)),
     }));
+  };
   const addRequest = (r: Req) => {
     if (r.date < dateAt(0)) {
       flash("Choose today or a future date for the request");
@@ -603,6 +901,7 @@ function App() {
     }
     const request = {
       ...r,
+      source: "demo" as const,
       id: makeId(
         "REQ",
         store.requests.map((item) => item.id),
@@ -624,6 +923,10 @@ function App() {
     flash("Supplier details saved");
   };
   const createProposal = (r: Req) => {
+    if (r.source === "supabase") {
+      flash("Actions for saved requests will be connected in a later update.");
+      return;
+    }
     const exists = store.proposals.find((p) => p.requestId === r.id);
     if (exists) {
       setLocation(`/proposals/${exists.id}`);
@@ -716,22 +1019,68 @@ function App() {
     flash("Calendar block removed");
   };
 
-  const approveProposal = (p: Proposal) => {
-    if (p.status !== "Pending Approval") {
-      flash("Submit this proposal for approval first");
+
+const approveProposal = async (p: Proposal): Promise<boolean> => {
+  // Saved AI proposals: approve Plan A and Plan B together
+  if (p.source === "supabase") {
+    if (p.status !== "Pending Business Approval") {
+      flash("This proposal is not awaiting Business approval.");
       return false;
     }
 
-    setStore((s) => ({
-      ...s,
-      proposals: s.proposals.map((x) =>
-        x.id === p.id ? { ...x, status: "Awaiting Customer" } : x,
-      ),
-    }));
+    if (!p.requestId || !p.revision) {
+      flash("Missing request ID or revision.");
+      return false;
+    }
 
-    flash("Proposal approved — awaiting customer acceptance");
-    return true;
-  };
+    try {
+      const { data, error } = await supabase.rpc(
+        "approve_ai_proposal_pair",
+        {
+          p_request_id: p.requestId,
+          p_revision: p.revision,
+        }
+      );
+
+      if (error) {
+        console.error("Business approval failed:", error);
+        flash(`Approval failed: ${error.message}`);
+        return false;
+      }
+
+      if (data !== 2) {
+        flash("Unexpected approval result. Please refresh.");
+        return false;
+      }
+
+      flash("Plan A and Plan B approved successfully!");
+      window.location.reload();
+      return true;
+    } catch (error) {
+      console.error("Unexpected approval error:", error);
+      flash("Unable to approve proposals.");
+      return false;
+    }
+  }
+
+  // Keep the original demo approval behavior
+  if (p.status !== "Pending Approval") {
+    flash("Submit this proposal for approval first");
+    return false;
+  }
+
+  setStore((s) => ({
+    ...s,
+    proposals: s.proposals.map((x) =>
+      x.id === p.id
+        ? { ...x, status: "Awaiting Customer" }
+        : x
+    ),
+  }));
+
+  flash("Proposal approved — awaiting customer acceptance");
+  return true;
+};
 
   const acceptProposal = (p: Proposal) => {
     if (p.status !== "Awaiting Customer") {
@@ -823,8 +1172,8 @@ function App() {
     );
   }
   const unread =
-    store.requests.filter((r) => r.status === "New").length +
-    store.proposals.filter((p) => p.status === "Pending Approval").length;
+    requestsForViews.filter((r) => r.status === "New").length +
+    proposalsForViews.filter((p) => p.status === "Pending Approval" || p.status === "Pending Business Approval").length;
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
@@ -872,7 +1221,7 @@ function App() {
                             (p) => p.status === "Pending Approval",
                           ).length
                         : item.href === "/requests"
-                          ? store.requests.filter((r) => r.status === "New")
+                          ? requestsForViews.filter((r) => r.status === "New")
                               .length
                           : 0;
                     return (
@@ -1024,9 +1373,12 @@ function App() {
                       path="/"
                       component={() => (
                         <Dashboard
-                          store={store}
+                          store={requestViewStore}
                           setLocation={setLocation}
                           openModal={setModal}
+                          requestFetchState={requestFetchState}
+                          requestFetchError={requestFetchError}
+                          supabaseRequestCount={supabaseRequests.length}
                         />
                       )}
                     />
@@ -1034,9 +1386,12 @@ function App() {
                       path="/requests"
                       component={() => (
                         <Requests
-                          store={store}
+                          store={requestViewStore}
                           setLocation={setLocation}
                           openModal={setModal}
+                          requestFetchState={requestFetchState}
+                          requestFetchError={requestFetchError}
+                          supabaseRequestCount={supabaseRequests.length}
                         />
                       )}
                     />
@@ -1044,7 +1399,7 @@ function App() {
                       path="/requests/:id"
                       component={() => (
                         <RequestDetail
-                          store={store}
+                          store={requestViewStore}
                           updateRequest={updateRequest}
                           createProposal={createProposal}
                           setLocation={setLocation}
@@ -1054,14 +1409,20 @@ function App() {
                     <Route
                       path="/proposals"
                       component={() => (
-                        <Proposals store={store} setLocation={setLocation} />
+                        <Proposals
+                          store={proposalViewStore}
+                          setLocation={setLocation}
+                          proposalFetchState={proposalFetchState}
+                          proposalFetchError={proposalFetchError}
+                          supabaseProposalCount={supabaseProposals.length}
+                        />
                       )}
                     />
                     <Route
                       path="/proposals/:id"
                       component={() => (
                         <ProposalDetail
-                          store={store}
+                          store={proposalViewStore}
                           saveProposal={saveProposal}
                           approve={approveProposal}
                           accept={acceptProposal}
@@ -1073,7 +1434,7 @@ function App() {
                       path="/approvals"
                       component={() => (
                         <Approvals
-                          store={store}
+                          store={proposalViewStore}
                           setLocation={setLocation}
                           approve={approveProposal}
                           saveProposal={saveProposal}
@@ -1332,7 +1693,30 @@ function Metric({ label, value, detail, icon: Icon, tone = "lavender" }: any) {
     </Panel>
   );
 }
-function Dashboard({ store, setLocation, openModal }: any) {
+function RequestFetchNotice({ state, error, count }: {
+  state: "idle" | "loading" | "loaded" | "error";
+  error: string;
+  count: number;
+}) {
+  if (state === "idle") return null;
+  const message = state === "loading"
+    ? "Loading saved customer requests from Supabase. Demo samples remain available below."
+    : state === "error"
+      ? `Could not load live requests from Supabase: ${error}. Demo samples are still shown separately.`
+      : count === 0
+        ? "No saved customer requests were found in Supabase. Demo samples are still shown separately."
+        : `${count} saved ${count === 1 ? "request" : "requests"} loaded from Supabase. Demo samples are labelled separately.`;
+  return (
+    <div
+      role={state === "error" ? "alert" : "status"}
+      className={`mb-4 rounded-xl border px-4 py-3 text-xs ${state === "error" ? "border-[#efcfd1] bg-[#fff4f4] text-[#a34e58]" : "border-[#e7dfe9] bg-[#fbf8fc] text-[#74677b]"}`}
+      data-testid="status-supabase-requests"
+    >
+      {message}
+    </div>
+  );
+}
+function Dashboard({ store, setLocation, openModal, requestFetchState, requestFetchError, supabaseRequestCount }: any) {
   const pending = store.proposals.filter(
     (p: Proposal) => p.status === "Pending Approval",
   );
@@ -1356,6 +1740,7 @@ function Dashboard({ store, setLocation, openModal }: any) {
           </Button>
         }
       />
+      <RequestFetchNotice state={requestFetchState} error={requestFetchError} count={supabaseRequestCount} />
       <div className="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Metric
           label="Open requests"
@@ -1507,6 +1892,9 @@ function Dashboard({ store, setLocation, openModal }: any) {
                         {r.name}
                       </span>
                       <span className="text-[10px] text-[#a79eaa]">{r.id}</span>
+                      <span className="rounded-full bg-[#f6f1f5] px-2 py-0.5 text-[9px] font-semibold text-[#817486]">
+                        {r.source === "supabase" ? "Saved request" : "Demo sample"}
+                      </span>
                     </div>
                     <p className="mt-1 truncate text-[10px] text-[#968d9a]">
                       {r.customer} · {r.type} ·{" "}
@@ -1647,7 +2035,7 @@ function Empty({ title, action, cta = "Add new" }: any) {
     </div>
   );
 }
-function Requests({ store, setLocation, openModal }: any) {
+function Requests({ store, setLocation, openModal, requestFetchState, requestFetchError, supabaseRequestCount }: any) {
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("All");
   const filtered = store.requests.filter(
@@ -1672,6 +2060,7 @@ function Requests({ store, setLocation, openModal }: any) {
           </Button>
         }
       />
+      <RequestFetchNotice state={requestFetchState} error={requestFetchError} count={supabaseRequestCount} />
       <Panel className="overflow-hidden">
         <div className="flex flex-col gap-3 border-b border-[#f0ebf1] p-4 md:flex-row md:items-center md:justify-between">
           <div className="relative w-full md:max-w-[340px]">
@@ -1733,7 +2122,7 @@ function Requests({ store, setLocation, openModal }: any) {
                   <td className="px-5 py-4">
                     <div className="text-[12px] font-bold">{r.customer}</div>
                     <div className="mt-1 text-[10px] text-[#9a919f]">
-                      {r.id} · {r.name}
+                      {r.id} · {r.name} · {r.source === "supabase" ? "Saved request" : "Demo sample"}
                     </div>
                   </td>
                   <td className="px-4 py-4 text-[11px] text-[#756b7c]">
@@ -1742,12 +2131,12 @@ function Requests({ store, setLocation, openModal }: any) {
                   <td className="px-4 py-4 text-[11px] text-[#756b7c]">
                     {dateLabel(r.date)}
                     <div className="mt-1 text-[10px] text-[#a39aa7]">
-                      {r.time}
+                      {r.time || "Not provided"}
                     </div>
                   </td>
-                  <td className="px-4 py-4 text-[11px]">{r.guests}</td>
+                  <td className="px-4 py-4 text-[11px]">{r.guests > 0 ? r.guests : "Not provided"}</td>
                   <td className="px-4 py-4 text-[11px] font-semibold">
-                    {money(r.budget)}
+                    {r.budget > 0 ? money(r.budget) : "Not provided"}
                   </td>
                   <td className="px-4 py-4">
                     <Status value={r.status} />
@@ -1773,7 +2162,7 @@ function Requests({ store, setLocation, openModal }: any) {
                 <div>
                   <div className="text-[12px] font-bold">{r.customer}</div>
                   <p className="mt-1 text-[10px] text-[#968b9b]">
-                    {r.name} · {r.id}
+                    {r.name} · {r.id} · {r.source === "supabase" ? "Saved request" : "Demo sample"}
                   </p>
                 </div>
                 <Status value={r.status} />
@@ -1783,7 +2172,7 @@ function Requests({ store, setLocation, openModal }: any) {
                   {r.type} ·{" "}
                   {dateLabel(r.date, { day: "numeric", month: "short" })}
                 </span>
-                <b>{money(r.budget)}</b>
+                <b>{r.budget > 0 ? money(r.budget) : "Not provided"}</b>
               </div>
             </Link>
           ))}
@@ -1801,7 +2190,9 @@ function RequestDetail({
   const { id = "" } = useParams();
   const r: Req | undefined = store.requests.find((x: Req) => x.id === id);
   if (!r) return <NotFound />;
-  const proposal = store.proposals.find((p: Proposal) => p.requestId === r.id);
+  const proposal = r.source === "supabase"
+    ? undefined
+    : store.proposals.find((p: Proposal) => p.requestId === r.id);
   return (
     <div className="fade-in">
       <button
@@ -1815,7 +2206,7 @@ function RequestDetail({
         eyebrow={`Request ${r.id}`}
         title={r.name}
         subtitle={`${r.type} · received ${dateLabel(r.date, { day: "numeric", month: "long" })}`}
-        action={<Status value={r.status} />}
+        action={<div className="flex items-center gap-2"><span className="rounded-full bg-[#f6f1f5] px-2.5 py-1 text-[10px] font-semibold text-[#817486]">{r.source === "supabase" ? "Saved request" : "Demo sample"}</span><Status value={r.status} /></div>}
       />
       <div className="grid gap-5 lg:grid-cols-[1.5fr_1fr]">
         <div className="space-y-5">
@@ -1824,9 +2215,9 @@ function RequestDetail({
             <div className="grid grid-cols-2 gap-x-5 gap-y-5 sm:grid-cols-3">
               {[
                 ["Event date", dateLabel(r.date)],
-                ["Start time", r.time],
-                ["Guest count", `${r.guests} guests`],
-                ["Budget", money(r.budget)],
+                ["Start time", r.time || "Not provided"],
+                ["Guest count", r.guests > 0 ? `${r.guests} guests` : "Not provided"],
+                ["Budget", r.budget > 0 ? money(r.budget) : "Not provided"],
                 ["Event type", r.type],
                 ["Request ID", r.id],
               ].map(([a, b]) => (
@@ -1851,6 +2242,7 @@ function RequestDetail({
                     {s}
                   </span>
                 ))}
+                {!r.services.length && <span className="text-[11px] text-[#968d9a]">No services specified</span>}
               </div>
             </div>
             <div className="mt-5 rounded-xl bg-[#fcf9fc] p-4">
@@ -1858,7 +2250,7 @@ function RequestDetail({
                 Notes from {r.customer.split(" ")[0]}
               </p>
               <p className="mt-2 text-[12px] leading-relaxed text-[#6f6574]">
-                {r.notes}
+                {r.notes || "No additional notes provided."}
               </p>
             </div>
           </Panel>
@@ -1867,15 +2259,11 @@ function RequestDetail({
             <div className="space-y-3">
               <div className="flex items-center gap-3 text-[12px]">
                 <Mail size={15} className="text-[#a47ba7]" />
-                <a className="hover:underline" href={`mailto:${r.email}`}>
-                  {r.email}
-                </a>
+                {r.email ? <a className="hover:underline" href={`mailto:${r.email}`}>{r.email}</a> : <span>Not provided</span>}
               </div>
               <div className="flex items-center gap-3 text-[12px]">
                 <Phone size={15} className="text-[#a47ba7]" />
-                <a className="hover:underline" href={`tel:${r.phone}`}>
-                  {r.phone}
-                </a>
+                {r.phone ? <a className="hover:underline" href={`tel:${r.phone}`}>{r.phone}</a> : <span>Not provided</span>}
               </div>
             </div>
           </Panel>
@@ -1886,6 +2274,11 @@ function RequestDetail({
               <WandSparkles size={16} className="text-[#976f9e]" />
               <h2 className="text-[14px] font-bold">Move this forward</h2>
             </div>
+            {r.source === "supabase" ? (
+              <p className="rounded-xl border border-[#e7dfe9] bg-[#fbf8fc] p-4 text-[11px] leading-relaxed text-[#74677b]" role="note">
+                This saved customer request is read-only. Status updates and proposal actions will be connected in a later update.
+              </p>
+            ) : <>
             <p className="mb-5 text-[11px] leading-relaxed text-[#877d8b]">
               Build a tailored proposal from the brief, or update its status as
               your conversation develops.
@@ -1940,6 +2333,7 @@ function RequestDetail({
                 ))}
               </select>
             </div>
+            </>}
           </Panel>
           <Panel className="p-5">
             <SectionTitle>At a glance</SectionTitle>
@@ -1950,7 +2344,7 @@ function RequestDetail({
               </div>
               <div className="flex justify-between">
                 <span className="text-[#918695]">Budget per guest</span>
-                <b>{money(Math.round(r.budget / r.guests))}</b>
+                <b>{r.guests > 0 && r.budget > 0 ? money(Math.round(r.budget / r.guests)) : "Not provided"}</b>
               </div>
               <div className="flex justify-between">
                 <span className="text-[#918695]">Date availability</span>
@@ -1970,7 +2364,26 @@ function RequestDetail({
     </div>
   );
 }
-function Proposals({ store, setLocation }: any) {
+function ProposalFetchNotice({ state, error, count }: {
+  state: "idle" | "loading" | "loaded" | "error";
+  error: string;
+  count: number;
+}) {
+  if (state === "idle") return null;
+  const message = state === "loading"
+    ? "Loading saved proposals from Supabase. Demo proposals remain available below."
+    : state === "error"
+      ? `Could not load saved proposals from Supabase: ${error}. Demo proposals are still shown separately.`
+      : count === 0
+        ? "No saved proposals were found in Supabase. Demo proposals are still shown separately."
+        : `${count} saved ${count === 1 ? "proposal" : "proposals"} loaded from Supabase. Demo proposals are labelled separately.`;
+  return (
+    <div role={state === "error" ? "alert" : "status"} className={`mb-4 rounded-xl border px-4 py-3 text-xs ${state === "error" ? "border-[#efcfd1] bg-[#fff4f4] text-[#a34e58]" : "border-[#e7dfe9] bg-[#fbf8fc] text-[#74677b]"}`} data-testid="status-supabase-proposals">
+      {message}
+    </div>
+  );
+}
+function Proposals({ store, setLocation, proposalFetchState, proposalFetchError, supabaseProposalCount }: any) {
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("All");
   const list = store.proposals.filter(
@@ -2000,7 +2413,9 @@ function Proposals({ store, setLocation }: any) {
           "All",
           "Draft",
           "Pending Approval",
+          "Pending Business Approval",
           "Approved",
+          "Awaiting Customer",
           "Revision Requested",
         ].map((x) => (
           <button
@@ -2013,6 +2428,7 @@ function Proposals({ store, setLocation }: any) {
           </button>
         ))}
       </div>
+      <ProposalFetchNotice state={proposalFetchState} error={proposalFetchError} count={supabaseProposalCount} />
       <div className="mb-4 relative max-w-sm">
         <Search
           size={15}
@@ -2045,7 +2461,7 @@ function Proposals({ store, setLocation }: any) {
   );
 }
 function ProposalCard({ proposal: p, setLocation }: any) {
-  const total = p.lines.reduce((s: number, l: Line) => s + l.qty * l.price, 0);
+  const total = p.planContent?.totalEstimatedMYR ?? p.lines.reduce((s: number, l: Line) => s + l.qty * l.price, 0);
   return (
     <Panel
       className="overflow-hidden transition hover:-translate-y-0.5 hover:shadow-md"
@@ -2057,7 +2473,7 @@ function ProposalCard({ proposal: p, setLocation }: any) {
           <div className="flex items-start justify-between gap-2">
             <div>
               <div className="text-[10px] font-bold uppercase tracking-[.13em] text-[#a181a6]">
-                {p.id} · {p.type}
+                {p.source === "supabase" ? "Saved proposal · " : ""}{p.planKey ? `Plan ${p.planKey} · ` : ""}{p.id} · {p.type}
               </div>
               <h2 className="serif mt-1 text-[20px]">{p.event}</h2>
               <p className="mt-1 text-[11px] text-[#8a7f91]">
@@ -2068,6 +2484,9 @@ function ProposalCard({ proposal: p, setLocation }: any) {
                   year: "numeric",
                 })}
               </p>
+              {p.source === "supabase" && (
+                <p className="mt-1 text-[10px] text-[#817486]">Saved proposal · Request {p.requestId}</p>
+              )}
             </div>
             <Status value={p.status} />
           </div>
@@ -2129,6 +2548,7 @@ function ProposalDetail({ store, saveProposal, approve, accept, flash }: any) {
   if (!p) return <NotFound />;
   const total = p.lines.reduce((a, l) => a + l.qty * l.price, 0);
   const req = store.requests.find((r: Req) => r.id === p.requestId);
+  if (p.source === "supabase") return <SavedProposalDetail proposal={p} request={req} />;
   const patch = (next: Proposal) => {
     setP(next);
     saveProposal(next);
@@ -2428,9 +2848,99 @@ function ProposalDetail({ store, saveProposal, approve, accept, flash }: any) {
     </div>
   );
 }
+function SavedProposalDetail({ proposal: p, request }: { proposal: Proposal; request?: Req }) {
+  const content = p.planContent;
+  const breakdown = content?.costBreakdown?.length
+    ? content.costBreakdown
+    : p.lines.map((line) => ({ item: line.service, description: `${line.qty} × ${money(line.price)}`, amountMYR: line.qty * line.price }));
+  const total = content?.totalEstimatedMYR ?? breakdown.reduce((sum, line) => sum + line.amountMYR, 0);
+  return (
+    <div className="fade-in">
+      <Link href="/proposals" className="mb-5 flex items-center gap-2 text-[11px] font-bold text-[#8e7a96]" data-testid="link-back-proposals">
+        <ArrowLeft size={15} /> All proposals
+      </Link>
+      <PageHeading
+        eyebrow={`Saved proposal${p.planKey ? ` · Plan ${p.planKey}` : ""} · ${p.id}`}
+        title={content?.title || p.event}
+        subtitle={`Prepared for ${p.customer} · ${dateLabel(p.date)} · Request ${p.requestId}`}
+        action={<Status value={p.status} />}
+      />
+      <div className="mb-4 rounded-xl border border-[#e7dfe9] bg-[#fbf8fc] px-4 py-3 text-xs text-[#74677b]" role="note">
+        Saved proposal · Read-only in this version. Proposal editing and approval actions will be connected later.
+      </div>
+      <div className="grid gap-5 xl:grid-cols-[1.55fr_1fr]">
+        <div className="space-y-5">
+          <Panel className="p-5 md:p-7">
+            <SectionTitle>Event concept</SectionTitle>
+            {content?.concept && <p className="mt-2 text-[12px] leading-relaxed text-[#756b7b]">{content.concept}</p>}
+            {content?.theme && <div className="mt-4"><p className="text-[10px] font-bold uppercase tracking-[.1em] text-[#a197a5]">Theme</p><p className="mt-1 text-[12px] text-[#756b7b]">{content.theme}</p></div>}
+            {!content?.concept && !content?.theme && <p className="mt-2 text-[11px] text-[#968d9a]">No full plan content was saved for this proposal.</p>}
+          </Panel>
+          {content?.timeline && content.timeline.length > 0 && (
+            <Panel className="p-5 md:p-6">
+              <SectionTitle>Event timeline</SectionTitle>
+              <div className="mt-3 divide-y divide-[#f1edf1]">
+                {content.timeline.map((item, index) => <div key={`${item.time}-${index}`} className="grid grid-cols-[90px_1fr] gap-3 py-3 text-[11px]"><span className="font-semibold text-[#805b8f]">{item.time}</span><span className="text-[#756b7b]">{item.activity}</span></div>)}
+              </div>
+            </Panel>
+          )}
+          {content?.venue && (
+            <Panel className="p-5 md:p-6">
+              <SectionTitle>Venue and setup</SectionTitle>
+              <p className="mt-2 text-[12px] font-semibold">{content.venue.name}</p>
+              <p className="mt-1 text-[11px] leading-relaxed text-[#756b7b]">{content.venue.setup}</p>
+            </Panel>
+          )}
+          {(content?.catering || content?.services?.length) && (
+            <Panel className="p-5 md:p-6">
+              <SectionTitle>Catering and selected services</SectionTitle>
+              {content.catering && <p className="mt-2 text-[11px] leading-relaxed text-[#756b7b]">{content.catering}</p>}
+              {content.services && <ul className="mt-3 list-inside list-disc space-y-1 text-[11px] text-[#756b7b]">{content.services.map((service, index) => <li key={`${service}-${index}`}>{service}</li>)}</ul>}
+            </Panel>
+          )}
+          <Panel className="p-5 md:p-6">
+            <SectionTitle>Itemized cost breakdown</SectionTitle>
+            {breakdown.length ? (
+              <div className="mt-3 overflow-x-auto">
+                <table className="w-full min-w-[420px] text-left text-[11px]">
+                  <thead><tr className="text-[9px] font-bold uppercase tracking-[.12em] text-[#a299a7]"><th className="pb-2">Item</th><th className="pb-2">Details</th><th className="pb-2 text-right">Estimated</th></tr></thead>
+                  <tbody>{breakdown.map((line, index) => <tr key={`${line.item}-${index}`} className="border-t border-[#f1edf1]"><td className="py-3 pr-3 font-semibold">{line.item}</td><td className="py-3 pr-3 text-[#756b7b]">{line.description}</td><td className="py-3 text-right font-semibold">{money(line.amountMYR)}</td></tr>)}</tbody>
+                </table>
+              </div>
+            ) : <p className="mt-2 text-[11px] text-[#968d9a]">No itemized costs were saved.</p>}
+            <div className="mt-4 flex justify-between border-t border-[#eee8ef] pt-4"><span className="text-[12px] font-bold">Estimated total</span><span className="text-[18px] font-bold text-[#684b74]" data-testid="text-proposal-total">{money(total)}</span></div>
+            <p className="mt-2 text-right text-[10px] text-[#a198a4]">Budget {p.budget > 0 ? money(p.budget) : "Not provided"} · {p.budget > 0 ? total <= p.budget ? "within budget" : "over budget" : "comparison unavailable"}</p>
+          </Panel>
+          {((content?.assumptions?.length ?? 0) > 0 || (content?.unconfirmedCosts?.length ?? 0) > 0) && (
+            <Panel className="p-5 md:p-6">
+              <SectionTitle>Assumptions and unconfirmed costs</SectionTitle>
+              {content?.assumptions?.length ? <><p className="mt-3 text-[10px] font-bold uppercase tracking-[.1em] text-[#a197a5]">Assumptions</p><ul className="mt-2 list-inside list-disc space-y-1 text-[11px] text-[#756b7b]">{content.assumptions.map((item, index) => <li key={`${item}-${index}`}>{item}</li>)}</ul></> : null}
+              {content?.unconfirmedCosts?.length ? <><p className="mt-4 text-[10px] font-bold uppercase tracking-[.1em] text-[#a197a5]">Unconfirmed costs</p><ul className="mt-2 list-inside list-disc space-y-1 text-[11px] text-[#756b7b]">{content.unconfirmedCosts.map((item, index) => <li key={`${item}-${index}`}>{item}</li>)}</ul></> : null}
+            </Panel>
+          )}
+        </div>
+        <aside className="space-y-5">
+          <Panel className="p-5">
+            <SectionTitle>Linked customer request</SectionTitle>
+            <div className="mt-3 space-y-3 text-[11px]">
+              <div className="flex justify-between gap-3"><span className="text-[#918695]">Customer</span><b className="text-right">{request?.customer || p.customer}</b></div>
+              <div className="flex justify-between gap-3"><span className="text-[#918695]">Event</span><b className="text-right">{request?.name || p.event}</b></div>
+              <div className="flex justify-between gap-3"><span className="text-[#918695]">Date</span><b className="text-right">{dateLabel(request?.date || p.date)}</b></div>
+              <div className="flex justify-between gap-3"><span className="text-[#918695]">Request ID</span><Link href={`/requests/${p.requestId}`} className="max-w-[65%] break-all text-right font-bold text-[#855e91] hover:underline" data-testid="link-proposal-request">{p.requestId}</Link></div>
+            </div>
+          </Panel>
+          <Panel className="p-5">
+            <SectionTitle>Proposal recommendation</SectionTitle>
+            <p className="mt-2 text-[11px] leading-relaxed text-[#756b7b]">{p.recommendation}</p>
+          </Panel>
+        </aside>
+      </div>
+    </div>
+  );
+}
 function Approvals({ store, setLocation, approve, saveProposal, flash }: any) {
   const pending = store.proposals.filter(
-    (p: Proposal) => p.status === "Pending Approval",
+    (p: Proposal) => p.status === "Pending Approval" || p.status === "Pending Business Approval",
   );
   return (
     <div className="fade-in">
@@ -2452,8 +2962,8 @@ function Approvals({ store, setLocation, approve, saveProposal, flash }: any) {
           value={money(
             pending.reduce(
               (a: number, p: Proposal) =>
-                a +
-                p.lines.reduce((b: number, l: Line) => b + l.qty * l.price, 0),
+                a + (p.planContent?.totalEstimatedMYR ??
+                p.lines.reduce((b: number, l: Line) => b + l.qty * l.price, 0)),
               0,
             ),
           )}
@@ -2496,8 +3006,10 @@ function Approvals({ store, setLocation, approve, saveProposal, flash }: any) {
 }
 function ApprovalCard({ p, approve, saveProposal, setLocation, flash }: any) {
   const [checklist, setChecklist] = useState(p.checklist);
-  const total = p.lines.reduce((a: number, l: Line) => a + l.qty * l.price, 0);
+  const isSaved = p.source === "supabase";
+  const total = p.planContent?.totalEstimatedMYR ?? p.lines.reduce((a: number, l: Line) => a + l.qty * l.price, 0);
   const toggle = (k: string) => {
+    if (isSaved) return;
     const next = { ...checklist, [k]: !(checklist as any)[k] };
     setChecklist(next);
     saveProposal({ ...p, checklist: next });
@@ -2509,7 +3021,7 @@ function ApprovalCard({ p, approve, saveProposal, setLocation, flash }: any) {
           <Moodboard type={p.type} />
           <div>
             <div className="text-[9px] font-bold uppercase tracking-[.14em] text-[#a181a6]">
-              {p.id} · {p.type}
+              {isSaved ? `Saved Plan ${p.planKey ?? "?"} · ${p.id}` : `${p.id} · Demo · ${p.type}`}
             </div>
             <h2 className="serif mt-1 text-[19px]">{p.event}</h2>
             <p className="mt-1 text-[11px] text-[#8c8190]">
@@ -2544,6 +3056,8 @@ function ApprovalCard({ p, approve, saveProposal, setLocation, flash }: any) {
           <button
             key={k}
             onClick={() => toggle(k)}
+            disabled={isSaved}
+            title={isSaved ? "Saved proposal checklist editing is not connected yet" : undefined}
             className={`flex items-center gap-1.5 rounded-full border px-3 py-2 text-[10px] font-semibold ${checklist[k as keyof typeof checklist] ? "border-[#d8e9dc] bg-[#eff7f0] text-[#548064]" : "border-[#eee7ef] bg-white text-[#968b9a]"}`}
             data-testid={`button-approval-check-${k}`}
           >
@@ -2556,6 +3070,22 @@ function ApprovalCard({ p, approve, saveProposal, setLocation, flash }: any) {
           </button>
         ))}
       </div>
+     
+{isSaved ? (
+  <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-[#f1edf1] pt-4">
+    <p className="text-xs text-[#74677b]">
+      Saved in Supabase · Business approval required
+    </p>
+
+    <Button
+      onClick={() => approve(p)}
+      testid={`button-approve-${p.id}`}
+    >
+      <Check size={14} /> Approve &amp; send both plans
+    </Button>
+  </div>
+) : (
+
       <div className="mt-4 flex flex-wrap justify-end gap-2 border-t border-[#f1edf1] pt-4">
         <Button
           variant="outline"
@@ -2578,6 +3108,7 @@ function ApprovalCard({ p, approve, saveProposal, setLocation, flash }: any) {
           <Check size={14} /> Approve &amp; send
         </Button>
       </div>
+      )}
     </Panel>
   );
 }
@@ -4047,9 +4578,7 @@ function StaffLogin() {
 }
 
 function EventFlowWelcome() {
-  const [selectedRole, setSelectedRole] = useState<
-    "customer" | "business" | null
-  >(null);
+  const [selectedRole, setSelectedRole] = useState<"business" | null>(null);
 
   if (selectedRole === "business") {
     return (
@@ -4060,31 +4589,15 @@ function EventFlowWelcome() {
     );
   }
 
-  if (selectedRole === "customer") {
-    return (
-      <EventFlowRegister
-        accountType="customer"
-        onBack={() => setSelectedRole(null)}
-      />
-    );
-  }
-
   return (
     <div className="flex min-h-screen flex-col items-center justify-center gap-6 p-6">
       <h1 className="text-4xl font-bold">Welcome to EventFlow</h1>
 
       <p className="text-gray-500">
-        Choose how you would like to use EventFlow.
+        Continue to your business workspace.
       </p>
 
       <div className="flex flex-wrap justify-center gap-4">
-        <button
-          onClick={() => setSelectedRole("customer")}
-          className="rounded-xl border p-8 hover:bg-gray-100 hover:text-gray-900"
-        >
-          Customer
-        </button>
-
         <button
           onClick={() => setSelectedRole("business")}
           className="rounded-xl border p-8 hover:bg-gray-100 hover:text-gray-900"
