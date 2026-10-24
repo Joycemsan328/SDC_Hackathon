@@ -431,7 +431,7 @@ export function CustomerProvider({ children }: { children: ReactNode }) {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(demoState));
     } catch { /* The portal remains usable without storage. */ }
   }, [state]);
-  useEffect(() => {
+useEffect(() => {
     let active = true;
     setRemoteError("");
     setState((current) => ({ ...current, events: current.events.filter((event) => event.requestSource !== "supabase") }));
