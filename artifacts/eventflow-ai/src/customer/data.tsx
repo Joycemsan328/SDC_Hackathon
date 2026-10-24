@@ -26,7 +26,9 @@ export type EventProposal = {
   plans: [EventPlan, EventPlan];
   updatedAt: string;
   source: "mock" | "ai-service" | "persisted-ai";
-  workflowStatus?: "Pending Business Approval" | "Approved for Customer";
+  workflowStatus?: "Pending Business Approval" | "Approved for Customer" | "Changes Requested";
+  proposalIds?: Partial<Record<"A" | "B", string>>;
+  revision?: string;
 };
 export type CustomerEvent = {
   id: string; name: string; type: string; date: string; location: string; guests: number;
@@ -72,6 +74,52 @@ type PersistedProposalResponse = {
   persistence: "created" | "existing";
   proposals: PersistedProposalRow[];
 };
+type SupabaseCustomerRequestRow = {
+  id: string;
+  customer_id: string;
+  customer_name: string | null;
+  email: string | null;
+  phone: string | null;
+  event_name: string | null;
+  event_type: string | null;
+  event_date: string | null;
+  event_time: string | null;
+  guests: number | string | null;
+  budget: number | string | null;
+  services: unknown;
+  notes: string | null;
+  status: string | null;
+  created_at: string | null;
+};
+type SupabaseCustomerProposalRow = {
+  id: string;
+  request_id: string;
+  status: string | null;
+  recommendation: string | null;
+  revision: string | null;
+  plan_key: string | null;
+  plan_content: unknown;
+};
+const OPTION_B_DEMO_SELECTIONS_KEY = "eventflow-option-b-demo-selections-v1";
+type DemoPlanSelection = { customerId: string; planKey: "A" | "B"; revision?: string; selectedAt: string };
+function readDemoPlanSelection(requestId: string, customerId: string, revision?: string): "A" | "B" | undefined {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(OPTION_B_DEMO_SELECTIONS_KEY) || "{}") as Record<string, DemoPlanSelection>;
+    const selection = parsed[requestId];
+    return selection?.customerId === customerId && selection.revision === revision ? selection.planKey : undefined;
+  } catch {
+    return undefined;
+  }
+}
+function writeDemoPlanSelection(requestId: string, customerId: string, planKey: "A" | "B", revision?: string): void {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(OPTION_B_DEMO_SELECTIONS_KEY) || "{}") as Record<string, DemoPlanSelection>;
+    parsed[requestId] = { customerId, planKey, revision, selectedAt: new Date().toISOString() };
+    localStorage.setItem(OPTION_B_DEMO_SELECTIONS_KEY, JSON.stringify(parsed));
+  } catch {
+    // The selected plan remains available in the current portal session.
+  }
+}
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -95,6 +143,116 @@ function mapGeneratedPlans(recommendation: string, plans: GeneratedProposalRespo
   const planB = mapped.find((plan) => plan.id === "B");
   if (!planA || !planB) throw new Error("The proposal service did not return both Plan A and Plan B.");
   return [planA, planB];
+}
+function mapPersistedPlan(value: unknown, expectedId: "A" | "B"): GeneratedProposalResponse["plans"][number] {
+  if (!isRecord(value) || value.id !== expectedId || typeof value.title !== "string"
+    || typeof value.concept !== "string" || typeof value.theme !== "string" || !Array.isArray(value.timeline)
+    || !isRecord(value.venue) || typeof value.venue.name !== "string" || typeof value.venue.setup !== "string"
+    || typeof value.catering !== "string" || !Array.isArray(value.services) || !Array.isArray(value.costBreakdown)
+    || typeof value.totalEstimatedMYR !== "number" || !Number.isFinite(value.totalEstimatedMYR)
+    || !Array.isArray(value.assumptions) || !Array.isArray(value.unconfirmedCosts)) {
+    throw new Error(`Saved Plan ${expectedId} is incomplete and cannot be displayed safely.`);
+  }
+  const timeline = value.timeline.flatMap((item) => isRecord(item) && typeof item.time === "string" && typeof item.activity === "string"
+    ? [{ time: item.time, activity: item.activity }]
+    : []);
+  const costBreakdown = value.costBreakdown.flatMap((item) => {
+    if (!isRecord(item) || typeof item.item !== "string" || typeof item.description !== "string") return [];
+    const amountMYR = typeof item.amountMYR === "number" ? item.amountMYR : Number(item.amountMYR);
+    return Number.isFinite(amountMYR) ? [{ item: item.item, description: item.description, amountMYR }] : [];
+  });
+  if (timeline.length !== value.timeline.length || costBreakdown.length !== value.costBreakdown.length) {
+    throw new Error(`Saved Plan ${expectedId} contains incomplete timeline or price details.`);
+  }
+  return {
+    id: expectedId,
+    title: value.title,
+    concept: value.concept,
+    theme: value.theme,
+    timeline,
+    venue: { name: value.venue.name, setup: value.venue.setup },
+    catering: value.catering,
+    services: value.services.filter((item): item is string => typeof item === "string"),
+    costBreakdown,
+    totalEstimatedMYR: value.totalEstimatedMYR,
+    assumptions: value.assumptions.filter((item): item is string => typeof item === "string"),
+    unconfirmedCosts: value.unconfirmedCosts.filter((item): item is string => typeof item === "string"),
+  };
+}
+function mapSavedRequest(row: SupabaseCustomerRequestRow, proposalRows: SupabaseCustomerProposalRow[], customerId: string): CustomerEvent {
+  const notes = row.notes ?? "";
+  const locationMatch = /^Location:\s*([^\r\n]+)/.exec(notes);
+  const location = locationMatch?.[1]?.trim() || "To be confirmed";
+  const noteBody = locationMatch ? notes.slice(locationMatch[0].length).replace(/^\s*\n?/, "").replace(/^\s*\n?/, "") : notes;
+  const metadata = /^EventFlow request metadata v1:\r?\nTheme:\s*([^\r\n]*)(?:\r?\n\r?\n([\s\S]*))?$/.exec(noteBody);
+  const theme = metadata?.[1]?.trim() ?? "";
+  const requirements = (metadata ? metadata[2] : noteBody).trim();
+  const validServices: Service[] = ["Catering", "Decoration", "Photography", "Venue Setup", "Equipment"];
+  const services = Array.isArray(row.services)
+    ? row.services.filter((service): service is Service => typeof service === "string" && validServices.includes(service as Service))
+    : [];
+  const proposalGroups = new Map<string, SupabaseCustomerProposalRow[]>();
+  for (const proposalRow of proposalRows.filter((item) => item.plan_key === "A" || item.plan_key === "B")) {
+    const key = proposalRow.revision ?? "";
+    const group = proposalGroups.get(key) ?? [];
+    group.push(proposalRow);
+    proposalGroups.set(key, group);
+  }
+  const newestRevision = [...proposalGroups.keys()].sort((a, b) => {
+    const numberA = Number(a);
+    const numberB = Number(b);
+    if (Number.isFinite(numberA) && Number.isFinite(numberB)) return numberB - numberA;
+    return b.localeCompare(a);
+  })[0];
+  const pair = newestRevision === undefined ? [] : proposalGroups.get(newestRevision)!;
+  let proposal: EventProposal | undefined;
+  let status: EventStatus = "Pending Business Approval";
+  if (pair.length === 2 && new Set(pair.map((item) => item.plan_key)).size === 2) {
+    const byPlan = new Map(pair.map((item) => [item.plan_key as "A" | "B", item]));
+    const planArow = byPlan.get("A")!;
+    const planBrow = byPlan.get("B")!;
+    if (typeof planArow.recommendation !== "string" || typeof planBrow.recommendation !== "string") {
+      throw new Error("The saved proposal pair is missing its recommendation.");
+    }
+    const plans = mapGeneratedPlans(
+      planArow.recommendation,
+      [mapPersistedPlan(planArow.plan_content, "A"), mapPersistedPlan(planBrow.plan_content, "B")],
+    );
+    const statuses = pair.map((item) => item.status);
+    if (statuses.every((item) => item === "Changes Requested")) status = "Changes Requested";
+    else if (statuses.every((item) => item === "Customer Accepted")) status = "Customer Accepted";
+    // Legacy "Awaiting Customer" pairs are deliberately still awaiting the
+    // customer's Option B selection; they are not treated as approved here.
+    else status = "Pending Business Approval";
+    proposal = {
+      plans,
+      updatedAt: row.created_at ?? new Date().toISOString(),
+      source: "persisted-ai",
+      workflowStatus: status === "Changes Requested" ? "Changes Requested" : "Pending Business Approval",
+      proposalIds: { A: planArow.id, B: planBrow.id },
+      revision: newestRevision || undefined,
+    };
+  } else if (proposalRows.some((item) => item.plan_key === "A" || item.plan_key === "B")) {
+    throw new Error("The saved proposal pair is incomplete; both plans are required.");
+  }
+  const createdAt = row.created_at ?? new Date().toISOString();
+  return {
+    id: row.id,
+    name: row.event_name?.trim() || "Untitled event",
+    type: row.event_type?.trim() || "Event",
+    date: row.event_date || "",
+    location,
+    guests: Number(row.guests) || 0,
+    budget: Number(row.budget) || 0,
+    theme,
+    services,
+    requirements,
+    status,
+    createdAt,
+    proposal,
+    preferredPlanId: readDemoPlanSelection(row.id, customerId, proposal?.revision),
+    requestSource: "supabase",
+  };
 }
 function persistedErrorMessage(code: unknown, message: unknown): string {
   if (code === "AUTHENTICATION_REQUIRED" || code === "INVALID_ACCESS_TOKEN") return "Your secure session expired. Please sign in again, then retry proposal generation.";
@@ -170,14 +328,14 @@ export const apiProposalService: ProposalService = {
         || typeof content.totalEstimatedMYR !== "number" || !Array.isArray(content.assumptions) || !Array.isArray(content.unconfirmedCosts)) {
         throw new Error("The saved proposal content is incomplete. Please contact the planning team.");
       }
-      return { planKey: value.plan_key, status: value.status, recommendation: value.recommendation, content };
+      return { planKey: value.plan_key, proposalId: value.proposal_id, status: value.status, recommendation: value.recommendation, content };
     });
     if (new Set(planRows.map((row) => row.planKey)).size !== 2) {
       throw new Error("The server did not return one saved Plan A and one saved Plan B.");
     }
-    const allPending = planRows.every((row) => row.status === "Pending Business Approval");
-    const allApprovedForCustomer = planRows.every((row) => row.status === "Awaiting Customer");
-    if (!allPending && !allApprovedForCustomer) {
+    const supportedPair = planRows.every((row) =>
+      row.status === "Pending Business Approval" || row.status === "Awaiting Customer");
+    if (!supportedPair) {
       throw new Error("The saved proposal status is not supported. Please contact the planning team.");
     }
     const recommendation = planRows.find((row) => row.planKey === "A")!.recommendation;
@@ -186,12 +344,20 @@ export const apiProposalService: ProposalService = {
       plans,
       updatedAt: new Date().toISOString(),
       source: "persisted-ai",
-      workflowStatus: allApprovedForCustomer ? "Approved for Customer" : "Pending Business Approval",
+      // Legacy pairs marked Awaiting Customer still need the customer's
+      // Option B selection; loading or retrying must not imply approval.
+      workflowStatus: "Pending Business Approval",
+      revision: String(result.revision),
+      proposalIds: {
+        A: planRows.find((row) => row.planKey === "A")?.proposalId,
+        B: planRows.find((row) => row.planKey === "B")?.proposalId,
+      },
     };
   },
 };
 type CustomerState = {
   user: { id: string; name: string; email: string } | null; authLoading: boolean; events: CustomerEvent[]; changeRequests: ChangeRequest[];
+  remoteLoading: boolean; remoteError: string;
   signIn: (email: string, password: string, registering?: boolean, fullName?: string) => Promise<{ error?: string; message?: string; signedIn: boolean }>;
   signOut: () => Promise<void>;
   createRequest: (event: ProposalGenerationInput) => Promise<string>;
@@ -241,7 +407,7 @@ function normalizeEvent(raw: CustomerEvent & { proposalReady?: boolean; quotatio
 function initialState(): PersistedState {
   try {
     const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved) { const parsed = JSON.parse(saved) as Partial<PersistedState> & { user?: unknown }; return { events: (parsed.events ?? demoEvents).map(normalizeEvent), changeRequests: parsed.changeRequests ?? [] }; }
+    if (saved) { const parsed = JSON.parse(saved) as Partial<PersistedState> & { user?: unknown }; return { events: (parsed.events ?? demoEvents).map(normalizeEvent).filter((event) => event.requestSource !== "supabase"), changeRequests: parsed.changeRequests ?? [] }; }
   } catch { /* Start with composed demo data when storage is unavailable. */ }
   return { events: demoEvents, changeRequests: [] };
 }
@@ -266,7 +432,14 @@ export function CustomerProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState(initialState);
   const [user, setUser] = useState<CustomerState["user"]>(null);
   const [authLoading, setAuthLoading] = useState(true);
-  useEffect(() => { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch { /* The portal remains usable without storage. */ } }, [state]);
+  const [remoteLoading, setRemoteLoading] = useState(false);
+  const [remoteError, setRemoteError] = useState("");
+  useEffect(() => {
+    try {
+      const demoState = { ...state, events: state.events.filter((event) => event.requestSource !== "supabase") };
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(demoState));
+    } catch { /* The portal remains usable without storage. */ }
+  }, [state]);
   useEffect(() => {
     let active = true;
     let revision = 0;
@@ -283,6 +456,7 @@ export function CustomerProvider({ children }: { children: ReactNode }) {
         const result = await customerFromAuthUser(session.user);
         if (!active || currentRevision !== revision) return;
         if (result.user) {
+          setRemoteLoading(true);
           setUser(result.user);
         } else {
           setUser(null);
@@ -331,7 +505,75 @@ export function CustomerProvider({ children }: { children: ReactNode }) {
       subscription.unsubscribe();
     };
   }, []);
-  const value = useMemo<CustomerState>(() => ({ ...state, user, authLoading,
+  useEffect(() => {
+    let active = true;
+    setRemoteError("");
+    setState((current) => ({ ...current, events: current.events.filter((event) => event.requestSource !== "supabase") }));
+    if (!user) {
+      setRemoteLoading(false);
+      return () => { active = false; };
+    }
+
+    setRemoteLoading(true);
+    void (async () => {
+      try {
+        const { data: authData, error: authError } = await supabase.auth.getUser();
+        if (authError || authData.user?.id !== user.id) throw new Error("Your secure session changed. Please sign in again.");
+        const { data: requestData, error: requestError } = await supabase
+          .from("requests")
+          .select("id, customer_id, customer_name, email, phone, event_name, event_type, event_date, event_time, guests, budget, services, notes, status, created_at")
+          .eq("customer_id", user.id)
+          .order("created_at", { ascending: false, nullsFirst: false });
+        if (requestError) throw new Error(`Saved requests could not be loaded: ${requestError.message}`);
+        if (!active) return;
+
+        const requestRows = (requestData ?? []) as unknown as SupabaseCustomerRequestRow[];
+        const requestIds = requestRows.filter((row) => row.customer_id === user.id).map((row) => row.id);
+        let proposalsByRequest = new Map<string, SupabaseCustomerProposalRow[]>();
+        let proposalError = "";
+        if (requestIds.length) {
+          const { data: proposalData, error } = await supabase
+            .from("proposals")
+            .select("id, request_id, status, recommendation, revision, plan_key, plan_content")
+            .in("request_id", requestIds);
+          if (error) proposalError = `Saved plans could not be loaded: ${error.message}`;
+          else {
+            for (const row of (proposalData ?? []) as unknown as SupabaseCustomerProposalRow[]) {
+              if (!requestIds.includes(row.request_id)) continue;
+              const group = proposalsByRequest.get(row.request_id) ?? [];
+              group.push(row);
+              proposalsByRequest.set(row.request_id, group);
+            }
+          }
+        }
+        if (!active) return;
+
+        let invalidPair = false;
+        const hydrated = requestRows
+          .filter((row) => row.customer_id === user.id)
+          .map((row) => {
+            try {
+              return mapSavedRequest(row, proposalsByRequest.get(row.id) ?? [], user.id);
+            } catch {
+              invalidPair = true;
+              return mapSavedRequest(row, [], user.id);
+            }
+          });
+        setState((current) => ({
+          ...current,
+          events: [...hydrated, ...current.events.filter((event) => event.requestSource !== "supabase")],
+        }));
+        setRemoteError(proposalError || (invalidPair ? "One saved Plan A/Plan B pair is incomplete and was not displayed." : ""));
+      } catch (error) {
+        if (active) setRemoteError(error instanceof Error ? error.message : "Saved EventFlow data could not be loaded.");
+      } finally {
+        if (active) setRemoteLoading(false);
+      }
+    })();
+
+    return () => { active = false; };
+  }, [user?.id]);
+  const value = useMemo<CustomerState>(() => ({ ...state, user, authLoading, remoteLoading, remoteError,
     signIn: async (email, password, registering = false, fullName = "") => {
       const trimmedEmail = email.trim();
       if (!trimmedEmail || !/^\S+@\S+\.\S+$/.test(trimmedEmail)) return { error: "Enter a valid email address.", signedIn: false };
@@ -351,6 +593,7 @@ export function CustomerProvider({ children }: { children: ReactNode }) {
           if (!data.session) return { message: "Account created. Check your email for a confirmation link, then sign in.", signedIn: false };
           const result = await customerFromAuthUser(data.session.user);
           if (!result.user) { await supabase.auth.signOut(); return { error: result.error, signedIn: false }; }
+          setRemoteLoading(true);
           setUser(result.user);
           return { signedIn: true };
         }
@@ -360,6 +603,7 @@ export function CustomerProvider({ children }: { children: ReactNode }) {
         if (!data.user) return { error: "Unable to establish a customer session. Please try again.", signedIn: false };
         const result = await customerFromAuthUser(data.user);
         if (!result.user) { await supabase.auth.signOut(); return { error: result.error, signedIn: false }; }
+        setRemoteLoading(true);
         setUser(result.user);
         return { signedIn: true };
       } catch {
@@ -438,18 +682,19 @@ if (existing?.proposal) {
   ),
 }));
     },
-    // Local draft preference only. A secure server endpoint is needed before Business can read it.
-    preferProposal: (id, planId) => setState((current) => ({
-      ...current,
-      events: current.events.map((event) =>
-        event.id === id && event.requestSource === "supabase" &&
-        event.proposal?.source === "persisted-ai" &&
-        event.status === "Pending Business Approval" &&
-        event.proposal.plans.some((plan) => plan.id === planId)
-          ? { ...event, preferredPlanId: planId }
-          : event
-      ),
-    })),
+    // Demo-only selection is shared with the Business Portal through this
+    // browser's localStorage. It never updates Supabase proposal records.
+    preferProposal: (id, planId) => {
+      if (!user) return;
+      const event = state.events.find((item) => item.id === id);
+      if (!event || event.requestSource !== "supabase" || event.proposal?.source !== "persisted-ai"
+        || event.status !== "Pending Business Approval" || !event.proposal.plans.some((plan) => plan.id === planId)) return;
+      writeDemoPlanSelection(id, user.id, planId, event.proposal.revision);
+      setState((current) => ({
+        ...current,
+        events: current.events.map((item) => item.id === id ? { ...item, preferredPlanId: planId } : item),
+      }));
+    },
     acceptProposal: (id, planId) => setState((current) => ({ ...current, events: current.events.map((event) => event.id === id && event.status === "Approved for Customer" && event.proposal?.plans.some((plan) => plan.id === planId) ? { ...event, status: "Customer Accepted", acceptedPlanId: planId } : event) })),
     requestChanges: (id, message) => setState((current) => {
       const event = current.events.find((item) => item.id === id); const trimmed = message.trim();
@@ -457,7 +702,7 @@ if (existing?.proposal) {
       const update: ChangeRequest = { id: `chg-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`, eventId: id, message: trimmed, createdAt: new Date().toISOString() };
       return { ...current, changeRequests: [update, ...current.changeRequests], events: current.events.map((item) => item.id === id ? { ...item, status: "Changes Requested" } : item) };
     }),
-  }), [state, user, authLoading]);
+  }), [state, user, authLoading, remoteLoading, remoteError]);
   return <CustomerContext.Provider value={value}>{children}</CustomerContext.Provider>;
 }
 export function useCustomer() { const context = useContext(CustomerContext); if (!context) throw new Error("useCustomer must be used inside CustomerProvider"); return context; }

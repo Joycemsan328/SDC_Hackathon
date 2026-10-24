@@ -243,6 +243,8 @@ type Proposal = {
   source?: "demo" | "supabase";
   planKey?: "A" | "B";
   planContent?: ProposalPlanContent;
+  customerSelectedForReview?: boolean;
+  demoSelection?: boolean;
 };
 type SupabaseProposalRow = {
   id: string;
@@ -301,6 +303,20 @@ type Store = {
 };
 
 const DB_KEY = "eventflow-demo-v1";
+const OPTION_B_DEMO_SELECTIONS_KEY = "eventflow-option-b-demo-selections-v1";
+type OptionBDemoSelection = { customerId: string; planKey: "A" | "B"; revision?: string; selectedAt?: string };
+function readOptionBDemoSelections(): Record<string, OptionBDemoSelection> {
+  try {
+    const value = JSON.parse(localStorage.getItem(OPTION_B_DEMO_SELECTIONS_KEY) || "{}");
+    return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  } catch {
+    return {};
+  }
+}
+function isInApprovalQueue(proposal: Proposal): boolean {
+  const isPending = proposal.status === "Pending Approval" || proposal.status === "Pending Business Approval";
+  return isPending && (proposal.source !== "supabase" || proposal.customerSelectedForReview === true);
+}
 const today = new Date();
 const dateAt = (offset: number) => {
   const d = new Date(today);
@@ -659,12 +675,19 @@ function App() {
   const [requestFetchState, setRequestFetchState] = useState<"idle" | "loading" | "loaded" | "error">("idle");
   const [requestFetchError, setRequestFetchError] = useState("");
   const [supabaseProposals, setSupabaseProposals] = useState<Proposal[]>([]);
+  const [demoPlanSelections, setDemoPlanSelections] = useState(readOptionBDemoSelections);
   const [proposalFetchState, setProposalFetchState] = useState<"idle" | "loading" | "loaded" | "error">("idle");
   const [proposalFetchError, setProposalFetchError] = useState("");
   const [session, setSession] = useState<Session | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [isStaff, setIsStaff] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
+
+  useEffect(() => {
+    const refreshSelections = () => setDemoPlanSelections(readOptionBDemoSelections());
+    window.addEventListener("storage", refreshSelections);
+    return () => window.removeEventListener("storage", refreshSelections);
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -859,12 +882,25 @@ function App() {
   const requestViewStore = useMemo(() => ({ ...store, requests: requestsForViews }), [store, requestsForViews]);
   const proposalsForViews = useMemo(() => {
     const merged = new Map<string, Proposal>();
-    for (const proposal of supabaseProposals) merged.set(proposal.id, { ...proposal, source: "supabase" });
+    for (const proposal of supabaseProposals) {
+      const selection = demoPlanSelections[proposal.requestId];
+      const selected = selection?.planKey === proposal.planKey && selection.revision === proposal.revision;
+      const status = selected && proposal.status === "Awaiting Customer"
+        ? "Pending Business Approval"
+        : proposal.status;
+      merged.set(proposal.id, {
+        ...proposal,
+        status,
+        source: "supabase",
+        customerSelectedForReview: selected,
+        demoSelection: selected,
+      });
+    }
     for (const proposal of store.proposals) {
       if (!merged.has(proposal.id)) merged.set(proposal.id, { ...proposal, source: "demo" });
     }
     return Array.from(merged.values());
-  }, [store.proposals, supabaseProposals]);
+  }, [store.proposals, supabaseProposals, demoPlanSelections]);
   const proposalViewStore = useMemo(() => ({ ...requestViewStore, proposals: proposalsForViews }), [requestViewStore, proposalsForViews]);
   const showRequestFetchStatus = requestFetchState !== "idle";
   useEffect(() => {
@@ -1173,7 +1209,7 @@ const approveProposal = async (p: Proposal): Promise<boolean> => {
   }
   const unread =
     requestsForViews.filter((r) => r.status === "New").length +
-    proposalsForViews.filter((p) => p.status === "Pending Approval" || p.status === "Pending Business Approval").length;
+    proposalsForViews.filter(isInApprovalQueue).length;
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
@@ -1217,9 +1253,7 @@ const approveProposal = async (p: Proposal): Promise<boolean> => {
                     const Icon = item.icon;
                     const badge =
                       item.href === "/approvals"
-                        ? store.proposals.filter(
-                            (p) => p.status === "Pending Approval",
-                          ).length
+                        ? proposalsForViews.filter(isInApprovalQueue).length
                         : item.href === "/requests"
                           ? requestsForViews.filter((r) => r.status === "New")
                               .length
@@ -2485,7 +2519,7 @@ function ProposalCard({ proposal: p, setLocation }: any) {
                 })}
               </p>
               {p.source === "supabase" && (
-                <p className="mt-1 text-[10px] text-[#817486]">Saved proposal · Request {p.requestId}</p>
+                <p className="mt-1 text-[10px] text-[#817486]">{p.customerSelectedForReview ? `Customer selected Plan ${p.planKey} · browser demo selection` : "Saved proposal · not selected for review"} · Request {p.requestId}</p>
               )}
             </div>
             <Status value={p.status} />
@@ -2866,7 +2900,9 @@ function SavedProposalDetail({ proposal: p, request }: { proposal: Proposal; req
         action={<Status value={p.status} />}
       />
       <div className="mb-4 rounded-xl border border-[#e7dfe9] bg-[#fbf8fc] px-4 py-3 text-xs text-[#74677b]" role="note">
-        Saved proposal · Read-only in this version. Proposal editing and approval actions will be connected later.
+        {p.customerSelectedForReview
+          ? `Customer selected Plan ${p.planKey} for review. This demo selection is stored in this browser only; no Supabase proposal record was changed.`
+          : "Saved proposal · Read-only. Only a customer-selected plan appears in the approval queue."}
       </div>
       <div className="grid gap-5 xl:grid-cols-[1.55fr_1fr]">
         <div className="space-y-5">
@@ -2939,9 +2975,7 @@ function SavedProposalDetail({ proposal: p, request }: { proposal: Proposal; req
   );
 }
 function Approvals({ store, setLocation, approve, saveProposal, flash }: any) {
-  const pending = store.proposals.filter(
-    (p: Proposal) => p.status === "Pending Approval" || p.status === "Pending Business Approval",
-  );
+  const pending = store.proposals.filter((p: Proposal) => isInApprovalQueue(p));
   return (
     <div className="fade-in">
       <PageHeading
@@ -3033,6 +3067,7 @@ function ApprovalCard({ p, approve, saveProposal, setLocation, flash }: any) {
                 of {money(p.budget)} budget
               </span>
             </p>
+            {isSaved && p.customerSelectedForReview && <p className="mt-2 text-[10px] font-bold text-[#64806b]" data-testid={`text-demo-selected-plan-${p.id}`}>Customer-selected Plan {p.planKey} · demo only</p>}
           </div>
         </div>
         <Button
@@ -3074,14 +3109,15 @@ function ApprovalCard({ p, approve, saveProposal, setLocation, flash }: any) {
 {isSaved ? (
   <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-[#f1edf1] pt-4">
     <p className="text-xs text-[#74677b]">
-      Saved in Supabase · Business approval required
+      Customer-selected proposal · demo-only review; database approval is not enabled
     </p>
 
     <Button
-      onClick={() => approve(p)}
-      testid={`button-approve-${p.id}`}
+      variant="outline"
+      onClick={() => setLocation(`/proposals/${p.id}`)}
+      testid={`button-review-selected-${p.id}`}
     >
-      <Check size={14} /> Approve &amp; send both plans
+      <Eye size={14} /> Review selected Plan {p.planKey}
     </Button>
   </div>
 ) : (
