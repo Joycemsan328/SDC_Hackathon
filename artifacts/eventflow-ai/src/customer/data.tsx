@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import type { Session, User as SupabaseUser } from "@supabase/supabase-js";
+import { useUnifiedAuth } from "@/auth/UnifiedAuth";
 import { supabase } from "@/lib/supabase";
 import { savePlanSelection, workflowErrorMessage, type PlanSelection } from "./workflow";
 
@@ -383,27 +383,15 @@ function initialState(): PersistedState {
   } catch { /* Start with composed demo data when storage is unavailable. */ }
   return { events: demoEvents, changeRequests: [] };
 }
-async function customerFromAuthUser(authUser: SupabaseUser): Promise<{ user?: CustomerState["user"]; error?: string }> {
-  const { data: profile, error } = await supabase
-    .from("profiles")
-    .select("account_type, role, approval_status, full_name")
-    .eq("id", authUser.id)
-    .maybeSingle();
-
-  if (error) return { error: "We couldn’t verify your customer profile. Please try again." };
-  if (!profile || profile.account_type !== "customer" || profile.role !== "customer" || profile.approval_status !== "approved") {
-    return { error: "This account does not have approved customer access. Please use the correct EventFlow portal." };
-  }
-
-  const metadataName = typeof authUser.user_metadata?.full_name === "string" ? authUser.user_metadata.full_name : "";
-  const name = typeof profile.full_name === "string" && profile.full_name.trim() ? profile.full_name : metadataName;
-  return { user: { id: authUser.id, name: name || authUser.email?.split("@")[0] || "Customer", email: authUser.email ?? "" } };
-}
 const CustomerContext = createContext<CustomerState | null>(null);
 export function CustomerProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState(initialState);
-  const [user, setUser] = useState<CustomerState["user"]>(null);
-  const [authLoading, setAuthLoading] = useState(true);
+  const auth = useUnifiedAuth();
+  const authLoading = auth.loading;
+  const user = useMemo<CustomerState["user"]>(() => {
+    if (!auth.session || auth.destination !== "/customer") return null;
+    return { id: auth.session.user.id, email: auth.session.user.email ?? "", name: auth.profile?.full_name?.trim() || auth.session.user.email?.split("@")[0] || "Customer" };
+  }, [auth.session?.user.id, auth.session?.user.email, auth.profile?.full_name, auth.destination]);
   const [remoteLoading, setRemoteLoading] = useState(false);
   const [remoteError, setRemoteError] = useState("");
   const [reloadVersion, setReloadVersion] = useState(0);
@@ -443,71 +431,6 @@ export function CustomerProvider({ children }: { children: ReactNode }) {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(demoState));
     } catch { /* The portal remains usable without storage. */ }
   }, [state]);
-  useEffect(() => {
-    let active = true;
-    let revision = 0;
-    let authEventReceived = false;
-    const pendingAuthTimers = new Set<number>();
-
-    const restoreSession = async (session: Session | null, currentRevision: number) => {
-      try {
-        if (!session) {
-          if (active && currentRevision === revision) setUser(null);
-          return;
-        }
-
-        const result = await customerFromAuthUser(session.user);
-        if (!active || currentRevision !== revision) return;
-        if (result.user) {
-          setRemoteLoading(true);
-          setUser(result.user);
-        } else {
-          setUser(null);
-          void supabase.auth.signOut().catch(() => {});
-        }
-      } catch {
-        if (!active || currentRevision !== revision) return;
-        setUser(null);
-        void supabase.auth.signOut().catch(() => {});
-      } finally {
-        if (active && currentRevision === revision) setAuthLoading(false);
-      }
-    };
-
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-      // getSession() is the single source for initial restoration.
-      if (event === "INITIAL_SESSION") return;
-      authEventReceived = true;
-      const currentRevision = ++revision;
-      setAuthLoading(true);
-      // Defer Supabase calls until after its auth callback has returned.
-      const timer = window.setTimeout(() => {
-        pendingAuthTimers.delete(timer);
-        void restoreSession(session, currentRevision);
-      }, 0);
-      pendingAuthTimers.add(timer);
-    });
-
-    const initialRevision = revision;
-    void (async () => {
-      try {
-        const { data, error } = await supabase.auth.getSession();
-        if (!active || authEventReceived || revision !== initialRevision) return;
-        const currentRevision = ++revision;
-        await restoreSession(error ? null : data.session, currentRevision);
-      } catch {
-        if (!active || authEventReceived || revision !== initialRevision) return;
-        await restoreSession(null, ++revision);
-      }
-    })();
-
-    return () => {
-      active = false;
-      pendingAuthTimers.forEach((timer) => window.clearTimeout(timer));
-      pendingAuthTimers.clear();
-      subscription.unsubscribe();
-    };
-  }, []);
   useEffect(() => {
     let active = true;
     setRemoteError("");
@@ -603,43 +526,8 @@ export function CustomerProvider({ children }: { children: ReactNode }) {
     }),
     user, authLoading, remoteLoading, remoteError, workflowError,
     reloadSavedEvents: () => setReloadVersion((version) => version + 1),
-    signIn: async (email, password, registering = false, fullName = "") => {
-      const trimmedEmail = email.trim();
-      if (!trimmedEmail || !/^\S+@\S+\.\S+$/.test(trimmedEmail)) return { error: "Enter a valid email address.", signedIn: false };
-      if (password.length < 6) return { error: "Password must be at least 6 characters.", signedIn: false };
-      try {
-        if (registering) {
-          if (!fullName.trim()) return { error: "Enter your full name.", signedIn: false };
-          const { data, error } = await supabase.auth.signUp({
-            email: trimmedEmail,
-            password,
-            options: {
-              data: { full_name: fullName.trim(), account_type: "customer" },
-              emailRedirectTo: window.location.origin,
-            },
-          });
-          if (error) return { error: error.message, signedIn: false };
-          if (!data.session) return { message: "Account created. Check your email for a confirmation link, then sign in.", signedIn: false };
-          const result = await customerFromAuthUser(data.session.user);
-          if (!result.user) { await supabase.auth.signOut(); return { error: result.error, signedIn: false }; }
-          setRemoteLoading(true);
-          setUser(result.user);
-          return { signedIn: true };
-        }
-
-        const { data, error } = await supabase.auth.signInWithPassword({ email: trimmedEmail, password });
-        if (error) return { error: error.message, signedIn: false };
-        if (!data.user) return { error: "Unable to establish a customer session. Please try again.", signedIn: false };
-        const result = await customerFromAuthUser(data.user);
-        if (!result.user) { await supabase.auth.signOut(); return { error: result.error, signedIn: false }; }
-        setRemoteLoading(true);
-        setUser(result.user);
-        return { signedIn: true };
-      } catch {
-        return { error: "Unable to connect to EventFlow authentication. Please try again.", signedIn: false };
-      }
-    },
-    signOut: async () => { await supabase.auth.signOut(); setUser(null); },
+    signIn: async (...args) => { const result = await auth.signIn(...args); return { ...result, signedIn: result.signedIn ?? false }; },
+    signOut: auth.signOut,
     createRequest: async (event) => {
       const { data: { user: authenticatedUser }, error: authError } = await supabase.auth.getUser();
       if (authError || !authenticatedUser) throw new Error("Your session could not be verified. Please sign in again before submitting.");

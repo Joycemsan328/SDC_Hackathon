@@ -4,17 +4,17 @@ import { ErrorBoundary } from '@/components/error-boundary';
 import { Toaster } from '@/components/ui/toaster';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { useLocation, Router as WouterRouter } from 'wouter';
-import { CustomerProvider } from '@/customer/data';
-import { CustomerArea } from '@/customer/Portal';
+import { UnifiedAuthProvider } from '@/auth/UnifiedAuth';
+import UnifiedRoutes from '@/auth/UnifiedRoutes';
 
 const queryClient = new QueryClient();
 
 function Router() {
   return (
     <RoutedErrorBoundary>
-      <CustomerProvider>
-        <CustomerArea />
-      </CustomerProvider>
+      <UnifiedAuthProvider>
+        <UnifiedRoutes />
+      </UnifiedAuthProvider>
     </RoutedErrorBoundary>
   );
 }

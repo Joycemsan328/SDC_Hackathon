@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ButtonHTMLAttributes, type FormEvent, type ReactNode } from 'react';
 import { Link, Route, Switch, useLocation } from 'wouter';
+import { useUnifiedAuth } from '@/auth/UnifiedAuth';
 import {
   ArrowLeft, ArrowRight, CalendarDays, Check, CheckCircle2, CircleHelp, ClipboardList,
   Clock3, Flower2, Heart, LayoutDashboard, LogOut, MapPin, Menu, MessageSquareText,
@@ -36,7 +37,7 @@ function AppShell({ children }: { children: ReactNode }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [helpMessage, setHelpMessage] = useState(false);
   const active = path.startsWith('/events/new') ? '/events/new' : path.startsWith('/events') ? '/events' : '/dashboard';
-  const logout = () => { signOut(); setPath('/login'); };
+  const logout = () => { void signOut().then(() => setPath('~/login', { replace: true })).catch(() => window.alert('Unable to sign out. Please retry.')); };
   return <div className="min-h-[100dvh] bg-[#fcfaf9] text-[#514858]">
     <aside className="fixed inset-y-0 left-0 z-30 hidden w-[252px] flex-col border-r border-[#eee4e9] bg-[#fffafa] px-6 py-7 lg:flex">
       <Link href="/dashboard" className="mb-11 flex items-center gap-3 no-underline"><Brand /></Link>
@@ -332,8 +333,8 @@ function EventDetail({ id }: { id?: string }) {
     </div>
   </div>;
 }
-function AuthPage({ mode }: { mode: 'login' | 'register' }) {
-  const { signIn } = useCustomer();
+export function AuthPage({ mode }: { mode: 'login' | 'register' }) {
+  const { signIn } = useUnifiedAuth();
   const [, setLocation] = useLocation();
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -343,11 +344,11 @@ function AuthPage({ mode }: { mode: 'login' | 'register' }) {
   const onSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault(); setError(''); setNotice(''); setDemoMessage(''); setLoading(true);
     const form = new FormData(event.currentTarget);
-    const result = await signIn(String(form.get('email')), String(form.get('password')), isRegister, String(form.get('fullName') ?? ''));
+    const result = await signIn(String(form.get('email')), String(form.get('password')), isRegister, String(form.get('fullName') ?? ''), form.get('accountType') === 'business' ? 'business' : 'customer');
     setLoading(false);
     if (result.error) setError(result.error);
     else if (result.message) setNotice(result.message);
-    else if (result.signedIn) setLocation('/dashboard');
+    else if (result.signedIn) setLocation('/', { replace: true });
   };
   const demo = () => setDemoMessage('Please sign in or create a customer account. The sample events remain available after authentication.');
   return <div className="grid min-h-[100dvh] bg-[#fcfaf9] lg:grid-cols-[minmax(400px,1fr)_minmax(460px,1fr)]">
@@ -368,6 +369,7 @@ function AuthPage({ mode }: { mode: 'login' | 'register' }) {
         {demoMessage && <div role="status" className="mt-5 rounded-xl border border-[#e5d9e2] bg-white px-4 py-3 text-sm text-[#706275]">{demoMessage}</div>}
         <form onSubmit={onSubmit} className="mt-7 space-y-4">
           {isRegister && <label className="block"><span className={labelClass}>Full name</span><input name="fullName" type="text" required autoComplete="name" placeholder="Your name" className={inputClass} data-testid="input-auth-name" /></label>}
+          {isRegister && <label className="block"><span className={labelClass}>Account type</span><select name="accountType" className={inputClass} data-testid="input-auth-account-type"><option value="customer">Customer</option><option value="business">Business — approval required</option></select><span className="mt-2 block text-xs text-[#8d8391]">This requests an account type; it does not grant staff or admin access.</span></label>}
           <label className="block"><span className={labelClass}>Email address</span><input name="email" type="email" required autoComplete="email" placeholder="you@example.com" className={inputClass} data-testid="input-auth-email" /></label>
           <label className="block"><span className={labelClass}>Password</span><input name="password" type="password" required minLength={6} autoComplete={isRegister ? 'new-password' : 'current-password'} placeholder="At least 6 characters" className={inputClass} data-testid="input-auth-password" /></label>
           <Button type="submit" disabled={loading} className="mt-2 w-full" data-testid={isRegister ? 'button-register' : 'button-login'}>{loading ? (isRegister ? 'Creating account…' : 'Signing in…') : (isRegister ? 'Create account' : 'Sign in')} {!loading && <ArrowRight size={15} />}</Button>
@@ -375,7 +377,7 @@ function AuthPage({ mode }: { mode: 'login' | 'register' }) {
         <div className="my-6 flex items-center gap-3"><div className="h-px flex-1 bg-[#eee6ec]" /><span className="text-[10px] font-semibold uppercase tracking-[.12em] text-[#aaa0ad]">or try the demo</span><div className="h-px flex-1 bg-[#eee6ec]" /></div>
         <button type="button" onClick={demo} className="flex min-h-12 w-full items-center justify-center gap-2 rounded-xl border border-[#e5d9e2] bg-white text-sm font-bold text-[#706275] transition-colors hover:bg-[#fcf7fa]" data-testid="button-demo-login"><Sparkles size={16} className="text-[#aa7190]" />View sample events after sign in</button>
         <p className="mt-6 text-center text-xs text-[#8d8391]">{isRegister ? 'Already planning with us?' : 'New to EventFlow?'} <Link href={isRegister ? '/login' : '/register'} className="font-bold text-[#a26684] no-underline hover:underline" data-testid={isRegister ? 'link-login' : 'link-register'}>{isRegister ? 'Sign in' : 'Create an account'}</Link></p>
-        <p className="mt-8 text-center text-[10px] leading-relaxed text-[#a69ca8]">Sign in with your EventFlow customer account.<br />Sample events are retained for demonstration.</p>
+        <p className="mt-8 text-center text-[10px] leading-relaxed text-[#a69ca8]">One EventFlow account for Customer and Business access.<br />Your approved profile determines your workspace.</p>
       </div>
     </section>
   </div>;
@@ -388,14 +390,14 @@ function ProtectedRoute({ children }: { children: ReactNode }) {
 }
 function RedirectToLogin() {
   const [, setLocation] = useLocation();
-  useEffect(() => { setLocation('/login'); }, [setLocation]);
+  useEffect(() => { setLocation('~/login', { replace: true }); }, [setLocation]);
   return <div className="min-h-[100dvh] bg-[#fcfaf9]" />;
 }
 export function CustomerArea() {
   return <Switch>
-    <Route path="/"><RedirectToLogin /></Route>
-    <Route path="/login"><AuthPage mode="login" /></Route>
-    <Route path="/register"><AuthPage mode="register" /></Route>
+    <Route path="/"><ProtectedRoute><Dashboard /></ProtectedRoute></Route>
+    <Route path="/login"><RedirectToLogin /></Route>
+    <Route path="/register"><RedirectToLogin /></Route>
     <Route path="/dashboard"><ProtectedRoute><Dashboard /></ProtectedRoute></Route>
     <Route path="/events"><ProtectedRoute><EventsList /></ProtectedRoute></Route>
     <Route path="/events/new"><ProtectedRoute><CreateEvent /></ProtectedRoute></Route>
