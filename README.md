@@ -40,8 +40,8 @@ For hackathon evaluation, please use the team's existing demonstration accounts.
 
 | Portal | Demo account email | Password |
 |---|---|---|
-| Business Portal | wangpaijoyce@gmail.com | Provided separately in the private demo credentials document |
-| Customer Portal | yyiaan.e@gmail.com | Provided separately in the private demo credentials document |
+| Business Portal | wangpaijoyce@gmail.com | joyce0328 |
+| Customer Portal | yyiaan.e@gmail.com | 123456 |
 
 **How to explore the demo:**
 
