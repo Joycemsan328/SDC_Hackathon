@@ -1,3 +1,11 @@
 - [Saved proposal verification](saved-proposal-verification.md) — distinguish authenticated empty results from lookup/mapping failures; never regenerate to resolve a read failure.
 - [Generated contract compatibility](generated-contracts.md) — named request-body components avoid Zod/TypeScript export collisions during OpenAPI code generation.
 - [Unified portal scope](unified-portal-scope.md) — one website/login is the product goal; keep the standalone Business app as a backup during consolidation.
+- [Portal auth revalidation](business-auth-revalidation.md) — preserve verified Customer/Business sessions during same-user checks; fail closed on sign-out, identity changes, or verification errors.
+- [Publishing workspace commands](publishing-workspace-commands.md) — use workspace-root scripts explicitly in artifact commands; only the unified service should publish.
+- [AI estimate arithmetic](ai-estimate-arithmetic.md) — owner-approved totals derive from unchanged validated line items; do not pay for regeneration just to fix arithmetic.
+- [Production log verification](production-log-verification.md) — empty error and unfiltered telemetry is inconclusive; use independent HTTP/browser checks and disclose the limit.
+- [Paid-generation ambiguity](paid-generation-ambiguity.md) — uncertain reservations stay consumed; never reclaim them automatically or reset the shared budget on deployment.
+- [Proposal service evidence](proposal-service-evidence.md) — normalize equivalent included scope, never invent missing services or prices; component exclusions differ from whole-plan exclusions.
+- [Contact Your Planner access model](contact-your-planner.md) — one request thread, Customer-first sends, current-confirmation admission, and pinned existing-chat proof.
+- [Customer revision lifecycle](customer-revision-lifecycle.md) — Customers may request changes before selection or after selection until Business finalizes and creates the Event.

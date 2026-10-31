@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { GeneratedProposalSchema, type GeneratedProposal } from "./proposalGenerator";
 import { SubmissionError } from "./submissionProposals";
-import { DEMO_QUOTA_KEY, EXTEND_QUOTA_TO_35_ONCE, INITIALIZE_QUOTA, RESERVE_GENERATION, TRANSITION_GENERATION } from "./generationQuotaScripts";
+import { DEMO_QUOTA_KEY, EXTEND_QUOTA_TO_35_ONCE, EXTEND_QUOTA_TO_50_ONCE, INITIALIZE_QUOTA, RESERVE_GENERATION, TRANSITION_GENERATION } from "./generationQuotaScripts";
 
 const EntrySchema = z.object({
   customerId: z.string().uuid(), token: z.string().uuid(), fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
@@ -68,6 +68,14 @@ export class RedisGenerationQuota implements GenerationQuota {
     if (result[0] === "EXTENDED") return "extended";
     if (result[0] === "ALREADY_APPLIED") return "already-applied";
     throw new SubmissionError("QUOTA_EXTENSION_REFUSED", 409, "The ledger must be the valid 20-attempt ledger with its previous extension and matching attempt history. Nothing was reset or overwritten.");
+  }
+
+  /** Operator-only one-time 35 -> 50 increase; never invoked by an HTTP route. */
+  async extendToFiftyOnce(): Promise<"extended" | "already-applied"> {
+    const result = await this.evaluate(EXTEND_QUOTA_TO_50_ONCE, [new Date().toISOString()]);
+    if (result[0] === "EXTENDED") return "extended";
+    if (result[0] === "ALREADY_APPLIED") return "already-applied";
+    throw new SubmissionError("QUOTA_EXTENSION_REFUSED", 409, "The ledger must be the valid 35-attempt ledger with both previous extensions and matching attempt history. Nothing was reset or overwritten.");
   }
 
   async reserve(identity: GenerationIdentity): Promise<GenerationReservation> {

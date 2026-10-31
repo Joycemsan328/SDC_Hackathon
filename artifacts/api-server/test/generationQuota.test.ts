@@ -4,14 +4,43 @@ import { test } from "node:test";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { RedisGenerationQuota, generationQuota, type GenerationIdentity } from "../src/services/generationQuota";
-import { DEMO_QUOTA_KEY } from "../src/services/generationQuotaScripts";
+import { DEMO_QUOTA_KEY, EXTEND_QUOTA_TO_50_ONCE, EXTEND_QUOTA_TO_35_ONCE, RESERVE_GENERATION } from "../src/services/generationQuotaScripts";
 import { mockQuotaRedis } from "./helpers/quotaRedis";
 
 function identity(): GenerationIdentity { return { requestId: randomUUID(), customerId: randomUUID(), fingerprint: "a".repeat(64) }; }
+test("quota Lua sources retain the prior 35 cap and gate 50 on all three extension markers", () => {
+  assert.match(EXTEND_QUOTA_TO_35_ONCE, /'limit', '35'/);
+  assert.match(EXTEND_QUOTA_TO_50_ONCE, /'limit', '50'/);
+  assert.match(EXTEND_QUOTA_TO_50_ONCE, /extension_15_applied/);
+  assert.match(EXTEND_QUOTA_TO_50_ONCE, /extension_20_to_35_applied/);
+  assert.match(EXTEND_QUOTA_TO_50_ONCE, /extension_35_to_50_applied/);
+  assert.match(EXTEND_QUOTA_TO_50_ONCE, /redis\.call\('TTL', KEYS\[1\]\) ~= -1/);
+  assert.match(RESERVE_GENERATION, /local usedRaw = redis\.call\('HGET', KEYS\[1\], 'used'\)/);
+  assert.match(RESERVE_GENERATION, /limit ~= '50'/);
+  assert.match(RESERVE_GENERATION, /extension_15_applied/);
+  assert.match(RESERVE_GENERATION, /extension_20_to_35_applied/);
+  assert.match(RESERVE_GENERATION, /extension_35_to_50_applied/);
+});
+
 function fixture() {
   const redis = mockQuotaRedis();
   const service = () => new RedisGenerationQuota("https://quota-test.upstash.io", "fake-server-secret", redis.fetcher);
   return { redis, service };
+}
+async function createValid35Ledger(
+  quota: RedisGenerationQuota,
+  service: () => RedisGenerationQuota,
+  hashes: Map<string, Map<string, string>>,
+) {
+  await quota.initializeOnce();
+  const hash = hashes.get(DEMO_QUOTA_KEY)!;
+  for (let i = 0; i < 5; i++) await service().reserve(identity());
+  hash.set("limit", "20");
+  hash.set("extension_15_applied", "1");
+  hash.set("extension_15_applied_at", "2026-01-01T00:00:00.000Z");
+  for (let i = 0; i < 9; i++) await service().reserve(identity());
+  assert.equal(await quota.extendToThirtyFiveOnce(), "extended");
+  return hash;
 }
 test("quota fails closed before explicit initialization; initialization never resets used slots", async () => {
   const { redis, service } = fixture(); const quota = service();
@@ -134,6 +163,96 @@ test("quota extension refuses an expiring ledger", async () => {
   assert.deepEqual([...hash], before);
 });
 
+test("one-time 35-to-50 extension is atomic, idempotent, and preserves used count and history", async () => {
+  const { redis, service } = fixture();
+  const quota = service();
+  const hash = await createValid35Ledger(quota, service, redis.hashes);
+  assert.equal(hash.get("used"), "14");
+  const historyBefore = [...hash].filter(([field]) => field.startsWith("request:") || field.startsWith("revision:"));
+
+  const results = await Promise.all(Array.from({ length: 20 }, () => service().extendToFiftyOnce()));
+  assert.equal(results.filter(result => result === "extended").length, 1);
+  assert.equal(results.filter(result => result === "already-applied").length, 19);
+  assert.equal(hash.get("limit"), "50");
+  assert.equal(hash.get("used"), "14");
+  assert.equal(hash.get("extension_15_applied"), "1");
+  assert.ok(hash.get("extension_15_applied_at"));
+  assert.equal(hash.get("extension_20_to_35_applied"), "1");
+  assert.ok(hash.get("extension_20_to_35_applied_at"));
+  assert.equal(hash.get("extension_35_to_50_applied"), "1");
+  assert.ok(hash.get("extension_35_to_50_applied_at"));
+  assert.deepEqual(
+    [...hash].filter(([field]) => field.startsWith("request:") || field.startsWith("revision:")),
+    historyBefore,
+  );
+
+  const attempts = await Promise.allSettled(Array.from({ length: 40 }, () => service().reserve(identity())));
+  assert.equal(attempts.filter(result => result.status === "fulfilled").length, 36);
+  for (const attempt of attempts) if (attempt.status === "rejected") {
+    assert.equal(attempt.reason.code, "DEMO_BUDGET_EXHAUSTED");
+  }
+  assert.equal(hash.get("used"), "50");
+  assert.deepEqual(
+    [...hash].filter(([field]) => field.startsWith("request:") || field.startsWith("revision:")).slice(0, historyBefore.length),
+    historyBefore,
+  );
+  await assert.rejects(service().reserve(identity()), { code: "DEMO_BUDGET_EXHAUSTED" });
+  assert.equal(hash.get("used"), "50");
+  assert.equal(redis.state.expiring, false, "the extension must not add expiry");
+});
+
+test("35-to-50 extension rejects corrupt, mismatched, or unexpected ledgers without mutation", async () => {
+  const mutations: Array<(hash: Map<string, string>) => void> = [
+    hash => hash.set("schema", "2"),
+    hash => hash.set("used", "13"),
+    hash => hash.set("used", "14.0"),
+    hash => hash.set("extension_15_applied_at", ""),
+    hash => hash.delete("extension_20_to_35_applied"),
+    hash => hash.set("extension_35_to_50_applied", "1"),
+    hash => hash.delete([...hash.keys()].find(field => field.startsWith("request:"))!),
+    hash => hash.set([...hash.keys()].find(field => field.startsWith("request:"))!, "not-json"),
+    hash => hash.set("unexpected-ledger-field", "unexpected"),
+  ];
+  for (const mutate of mutations) {
+    const { redis, service } = fixture();
+    const quota = service();
+    const hash = await createValid35Ledger(quota, service, redis.hashes);
+    mutate(hash);
+    const before = [...hash];
+    await assert.rejects(quota.extendToFiftyOnce());
+    assert.deepEqual([...hash], before, "rejected extension must not modify any ledger field");
+  }
+
+  const { redis, service } = fixture();
+  const hash = await createValid35Ledger(service(), service, redis.hashes);
+  const before = [...hash];
+  redis.state.expiring = true;
+  await assert.rejects(service().extendToFiftyOnce());
+  assert.deepEqual([...hash], before, "an expiring ledger must remain unchanged");
+});
+
+test("50-limit reservations fail closed unless all three extension histories and matching entries are valid", async () => {
+  const mutations: Array<(hash: Map<string, string>) => void> = [
+    hash => hash.delete("extension_15_applied_at"),
+    hash => hash.set("extension_20_to_35_applied_at", ""),
+    hash => hash.delete("extension_35_to_50_applied"),
+    hash => hash.set("used", "14.0"),
+    hash => hash.delete([...hash.keys()].find(field => field.startsWith("request:"))!),
+    hash => hash.set([...hash.keys()].find(field => field.startsWith("request:"))!, "not-json"),
+    hash => hash.set("unrecognized-field", "value"),
+  ];
+  for (const mutate of mutations) {
+    const { redis, service } = fixture();
+    const quota = service();
+    const hash = await createValid35Ledger(quota, service, redis.hashes);
+    await quota.extendToFiftyOnce();
+    mutate(hash);
+    const before = [...hash];
+    await assert.rejects(service().reserve(identity()), { code: "QUOTA_UNAVAILABLE" });
+    assert.deepEqual([...hash], before, "invalid 50-limit ledger must not consume or modify quota");
+  }
+});
+
 test("unapproved and unlimited quota values fail closed", async () => {
   const { redis, service } = fixture();
   await service().initializeOnce();
@@ -223,6 +342,37 @@ test("quota extension CLI requires explicit approval and disabled generation fla
     assert.equal(active.status, 1);
     assert.match(active.stderr, /Keep both generation activation flags disabled/);
   }
+});
+test("50-attempt quota extension CLI requires explicit approval and both flags explicitly false", () => {
+  const script = fileURLToPath(new URL("../../../scripts/extend-demo-quota-to-50.ts", import.meta.url));
+  const env = {
+    ...process.env,
+    EVENTFLOW_QUOTA_REDIS_REST_URL: "",
+    EVENTFLOW_QUOTA_REDIS_REST_TOKEN: "",
+    EVENTFLOW_LIVE_GENERATION_ENABLED: "",
+    EVENTFLOW_MVP_INSERT_VERIFIED: "",
+  };
+  const implicit = spawnSync(process.execPath, ["--import", "tsx", script], { env, encoding: "utf8" });
+  assert.equal(implicit.status, 1);
+  assert.match(implicit.stderr, /Explicit owner action required/);
+
+  for (const overrides of [
+    { EVENTFLOW_LIVE_GENERATION_ENABLED: "true" },
+    { EVENTFLOW_MVP_INSERT_VERIFIED: "true" },
+  ]) {
+    const result = spawnSync(process.execPath, ["--import", "tsx", script, "--approve-50-total-attempts"], {
+      env: { ...env, EVENTFLOW_LIVE_GENERATION_ENABLED: "false", EVENTFLOW_MVP_INSERT_VERIFIED: "false", ...overrides },
+      encoding: "utf8",
+    });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /must be explicitly set to false/);
+  }
+  const approvedButOffline = spawnSync(process.execPath, ["--import", "tsx", script, "--approve-50-total-attempts"], {
+    env: { ...env, EVENTFLOW_LIVE_GENERATION_ENABLED: "false", EVENTFLOW_MVP_INSERT_VERIFIED: "false" },
+    encoding: "utf8",
+  });
+  assert.equal(approvedButOffline.status, 1);
+  assert.match(approvedButOffline.stderr, /server-only Redis REST credentials/);
 });
 test("real-store self-test refuses missing credentials before any network operation", () => {
   const script = fileURLToPath(new URL("../../../scripts/verify-demo-quota.ts", import.meta.url));
