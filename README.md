@@ -34,6 +34,7 @@
 ## Demo Access & Login Instructions
 
 **Live website:** https://event-flow-ai-customer-portal.replit.app/login
+**To view the slide deck, save the PPTX file before opening**
 
 For hackathon evaluation, please use the team's existing demonstration accounts. **Newly registered Business accounts require approval from a Business Administrator before they can access the Business Portal.** Therefore, registering a new Business account may not provide immediate access during judging.
 
