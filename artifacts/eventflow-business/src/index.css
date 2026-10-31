@@ -1,0 +1,104 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap');
+@import 'tailwindcss';
+@import 'tw-animate-css';
+@plugin "@tailwindcss/typography";
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: hsl(var(--background)); --color-foreground: hsl(var(--foreground)); --color-border: hsl(var(--border)); --color-input: hsl(var(--input)); --color-ring: hsl(var(--ring));
+  --color-card: hsl(var(--card)); --color-card-foreground: hsl(var(--card-foreground)); --color-primary: hsl(var(--primary)); --color-primary-foreground: hsl(var(--primary-foreground));
+  --color-secondary: hsl(var(--secondary)); --color-secondary-foreground: hsl(var(--secondary-foreground)); --color-muted: hsl(var(--muted)); --color-muted-foreground: hsl(var(--muted-foreground));
+  --color-accent: hsl(var(--accent)); --color-accent-foreground: hsl(var(--accent-foreground)); --color-destructive: hsl(var(--destructive)); --color-destructive-foreground: hsl(var(--destructive-foreground));
+  --font-sans: var(--app-font-sans); --font-serif: var(--app-font-serif); --font-mono: var(--app-font-mono);
+  --radius-sm: calc(var(--radius) - 4px); --radius-md: calc(var(--radius) - 2px); --radius-lg: var(--radius); --radius-xl: calc(var(--radius) + 4px);
+}
+:root {
+  --background: 32 35% 97%; --foreground: 258 23% 22%; --border: 277 22% 90%; --card: 0 0% 100%; --card-foreground: 258 23% 22%;
+  --sidebar: 272 36% 97%; --sidebar-foreground: 258 23% 25%; --sidebar-border: 275 24% 90%; --sidebar-primary: 278 36% 43%; --sidebar-primary-foreground: 0 0% 100%; --sidebar-accent: 330 45% 94%; --sidebar-accent-foreground: 278 37% 35%; --sidebar-ring: 278 36% 43%;
+  --popover: 0 0% 100%; --popover-foreground: 258 23% 22%; --primary: 278 36% 43%; --primary-foreground: 0 0% 100%; --secondary: 330 46% 94%; --secondary-foreground: 278 37% 35%;
+  --muted: 270 25% 95%; --muted-foreground: 260 10% 52%; --accent: 330 47% 93%; --accent-foreground: 278 37% 34%; --destructive: 2 64% 55%; --destructive-foreground: 0 0% 100%; --input: 277 22% 88%; --ring: 278 36% 43%;
+  --chart-1: 278 36% 43%; --chart-2: 336 52% 72%; --chart-3: 198 27% 64%; --chart-4: 42 62% 71%; --chart-5: 155 26% 61%;
+  --app-font-sans: 'DM Sans', sans-serif; --app-font-serif: 'Playfair Display', serif; --app-font-mono: 'DM Sans', sans-serif; --radius: 1rem;
+  --button-outline: rgba(70,40,80,.1); --badge-outline: rgba(70,40,80,.05); --elevate-1: rgba(80,50,90,.03); --elevate-2: rgba(80,50,90,.08);
+  --shadow-2xs: 0 2px 5px rgba(82,53,88,.04); --shadow-xs: 0 2px 8px rgba(82,53,88,.05); --shadow-sm: 0 5px 16px rgba(82,53,88,.06); --shadow: 0 8px 24px rgba(82,53,88,.07); --shadow-md: 0 12px 32px rgba(82,53,88,.08); --shadow-lg: 0 20px 48px rgba(82,53,88,.1); --shadow-xl: 0 26px 64px rgba(82,53,88,.12); --shadow-2xl: 0 30px 80px rgba(82,53,88,.15);
+}
+.dark {
+  --background: 258 22% 13%; --foreground: 32 28% 94%; --border: 270 15% 28%; --card: 258 20% 17%; --card-foreground: 32 28% 94%;
+  --sidebar: 258 25% 15%; --sidebar-foreground: 32 28% 94%; --sidebar-border: 270 15% 28%; --sidebar-primary: 278 44% 67%; --sidebar-primary-foreground: 258 25% 15%; --sidebar-accent: 278 24% 25%; --sidebar-accent-foreground: 32 28% 94%; --sidebar-ring: 278 44% 67%;
+  --popover: 258 20% 17%; --popover-foreground: 32 28% 94%; --primary: 278 44% 67%; --primary-foreground: 258 25% 15%; --secondary: 330 22% 26%; --secondary-foreground: 32 28% 94%;
+  --muted: 258 15% 23%; --muted-foreground: 270 12% 69%; --accent: 330 22% 26%; --accent-foreground: 32 28% 94%; --destructive: 2 64% 62%; --destructive-foreground: 0 0% 100%; --input: 270 15% 32%; --ring: 278 44% 67%;
+  --chart-1: 278 44% 67%; --chart-2: 336 52% 72%; --chart-3: 198 27% 64%; --chart-4: 42 62% 71%; --chart-5: 155 26% 61%;
+}
+@layer base {
+  * { @apply border-border; }
+  body { @apply font-sans antialiased bg-background text-foreground; font-family: var(--app-font-sans); background: #fbf9f7; }
+  button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 3px solid #c69bcf; outline-offset: 2px; }
+}
+.serif { font-family: var(--app-font-serif); }
+:root { --app-font-serif: 'DM Sans', sans-serif; --app-font-mono: 'DM Sans', sans-serif; }
+.serif { font-family: var(--app-font-sans); }
+.app-shell { min-height: 100dvh; background: #fbf9f7; }
+.sidebar-link { transition: background .18s ease, color .18s ease, transform .18s ease; }
+.sidebar-link:hover { transform: translateX(2px); }
+.surface { background: #fff; border: 1px solid #eee8ef; box-shadow: 0 5px 22px rgba(81,55,88,.045); }
+.soft-shadow { box-shadow: 0 12px 32px rgba(81,55,88,.08); }
+.fade-in { animation: fadeUp .34s ease both; }
+@keyframes fadeUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+.scrollbar-soft::-webkit-scrollbar { width: 6px; height: 6px; }
+.scrollbar-soft::-webkit-scrollbar-thumb { background: #ecd3e2; border-radius: 9px; }
+
+/* Light magenta replaces the previous lavender-purple accent palette. */
+:root {
+  --primary: 322 43% 52%;
+  --ring: 322 43% 52%;
+  --sidebar-primary: 322 43% 52%;
+  --chart-1: 322 43% 52%;
+}
+.dark {
+  --primary: 322 43% 66%;
+  --ring: 322 43% 66%;
+  --sidebar-primary: 322 43% 66%;
+  --chart-1: 322 43% 66%;
+}
+button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
+  outline-color: #d982b5;
+}
+
+:is([class~="bg-[#77518a]"]) {
+  background-color: #b84f91 !important;
+}
+:is([class~="bg-[#684578]"]) {
+  background-color: #a83275 !important;
+}
+:is([class~="bg-[#8e6b9b]"], [class~="bg-[#d9c6e0]"], [class~="bg-[#e7d7e8]"], [class~="bg-[#e9d6e8]"], [class~="bg-[#ece8f4]"], [class~="bg-[#ede4f1]"], [class~="bg-[#eee5f1]"], [class~="bg-[#eee7f4]"], [class~="bg-[#f0eafb]"], [class~="bg-[#f1edf2]"], [class~="bg-[#f2eaf4]"], [class~="bg-[#f3edf5]"], [class~="bg-[#f4e9f3]"], [class~="bg-[#f5edf5]"], [class~="bg-[#f5edf6]"], [class~="bg-[#f5eff6]"], [class~="bg-[#f6f0f7]"], [class~="bg-[#f7eff8]"], [class~="bg-[#f7f1f8]"], [class~="bg-[#f7f2f8]"], [class~="bg-[#f7f3f8]"], [class~="bg-[#f8f1f9]"], [class~="bg-[#f8f3f9]"], [class~="bg-[#f8f4f9]"], [class~="bg-[#faf6fb]"], [class~="bg-[#fcf8fc]"], [class~="bg-[#fcf9fc]"], [class~="bg-[#fcfafc]"], [class~="bg-[#fdfafd]"], [class~="bg-[#fdfbfd]"]) {
+  background-color: #f8edf3 !important;
+}
+
+:is([class~="text-[#674676]"], [class~="text-[#684b74]"], [class~="text-[#6d4d7e]"], [class~="text-[#714981]"], [class~="text-[#76528a]"], [class~="text-[#76538a]"], [class~="text-[#765697]"], [class~="text-[#77518a]"], [class~="text-[#805b8f]"], [class~="text-[#805c8e]"], [class~="text-[#806d9b]"], [class~="text-[#845d8b]"], [class~="text-[#84618c]"], [class~="text-[#855e91]"], [class~="text-[#865d92]"], [class~="text-[#866294]"], [class~="text-[#86648f]"], [class~="text-[#866790]"], [class~="text-[#896895]"], [class~="text-[#8c6792]"], [class~="text-[#966e9b]"], [class~="text-[#976f9e]"], [class~="text-[#9875a1]"], [class~="text-[#9978a0]"], [class~="text-[#9a729b]"]) {
+  color: #98416f !important;
+}
+:is([class~="text-[#a181a6]"], [class~="text-[#a37ea7]"], [class~="text-[#a47ba7]"], [class~="text-[#a987a9]"], [class~="text-[#bd91b2]"]) {
+  color: #bb7399 !important;
+}
+:is([class~="text-[#d8b8df]"]) {
+  color: #d49abd !important;
+}
+
+:is([class~="border-[#b992c0]"], [class~="border-[#c9a9d1]"], [class~="border-[#d9c7df]"], [class~="border-[#dccae2]"], [class~="border-[#decce3]"], [class~="border-[#e7dce9]"], [class~="border-[#e8e0e9]"], [class~="border-[#eee6ef]"], [class~="border-[#eee7ef]"], [class~="border-[#eee8ef]"], [class~="border-[#f0eaf1]"], [class~="border-[#f0ebf1]"], [class~="border-[#f1ebf2]"], [class~="border-[#f5f0f5]"]) {
+  border-color: #ecd3e2 !important;
+}
+[class*="shadow-[#8c6b9b]"] {
+  --tw-shadow-color: #b84f91 !important;
+}
+:is([class~="hover:bg-[#684578]"]):hover {
+  background-color: #a83275 !important;
+}
+:is([class~="hover:bg-[#eee5f1]"], [class~="hover:bg-[#f6f0f7]"], [class~="hover:bg-[#f7f1f8]"], [class~="hover:bg-[#f7f2f8]"], [class~="hover:bg-[#f8f1f9]"], [class~="hover:bg-[#f8f3f9]"], [class~="hover:bg-[#f9edf2]"], [class~="hover:bg-[#faf6fb]"], [class~="hover:bg-[#fcf8fc]"], [class~="hover:bg-[#fcf9fc]"], [class~="hover:bg-[#fdfafd]"]):hover {
+  background-color: #f8edf3 !important;
+}
+:is([class~="hover:text-[#674676]"], [class~="hover:text-[#6d4d7e]"]):hover {
+  color: #98416f !important;
+}
+:is([class~="hover:border-[#d9c7df]"], [class~="hover:border-[#dccae2]"], [class~="hover:border-[#decce3]"], [class~="hover:border-[#eee7ef]"]):hover {
+  border-color: #ecd3e2 !important;
+}

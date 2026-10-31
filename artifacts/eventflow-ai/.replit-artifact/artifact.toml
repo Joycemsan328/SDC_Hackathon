@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "EventFlow AI"
+description = "A customer portal for planning events with small event-management companies. Customers can create and track event requests, review approved proposals, and submit change requests with demo data saved in the browser."
+version = "1.0.0"
+id = "artifacts/eventflow-ai"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 19894
+
+[services.development]
+run = "pnpm --filter @workspace/eventflow-ai run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/eventflow-ai", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/eventflow-ai/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "19894"
+BASE_PATH = "/"
