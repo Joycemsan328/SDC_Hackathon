@@ -32,13 +32,39 @@
 | **Demo Video** | https://youtu.be/fG2moln09z0 |
 
 ---
-## Brief Overview
-New users can register for a business of customer account; an email verification will be sent to the registered account. However, we have yet to successfully allow email authorization.
-After registering for the new account, users can straight away sign into the website using the registered details.
+## Demo Access & Login Instructions
 
-The website is connected with a Customer Portal and Business Portal. In the Customer portal, users can create event requests, track event status, and review AI-generated proposals.
-After approving the proposals, two alternative proposals will be sent to the Business portal for approval. 
-In the Business portal, businesses can manage customer requests, review AI-generated proposals, approve event plans and book availability to avoid clashing of events.
+**Live website:** https://event-flow-ai-customer-portal.replit.app/login
+
+For hackathon evaluation, please use the team's existing demonstration accounts. **Newly registered Business accounts require approval from a Business Administrator before they can access the Business Portal.** Therefore, registering a new Business account may not provide immediate access during judging.
+
+| Portal | Demo account email | Password |
+|---|---|---|
+| Business Portal | wangpaijoyce@gmail.com | Provided separately in the private demo credentials document |
+| Customer Portal | yyiaan.e@gmail.com | Provided separately in the private demo credentials document |
+
+**How to explore the demo:**
+
+1. Open the live website using the link above.
+2. Log in using the provided **Customer Portal** demo account to explore event creation, request tracking, and proposal review.
+3. Log out and sign in using the provided **Business Portal** demo account to explore incoming requests, AI proposal review, and the approval workflow.
+4. To observe the complete workflow, submit a customer event request, review the resulting proposals as a Business user, and return to the Customer Portal to view the approved options (subject to AI service availability).
+
+**Why pre-approved accounts are provided:** Business account approval is an intentional role-based access control measure. It prevents unverified users from accessing business-level functions and customer requests. The supplied Business demo account has already completed the required approval process.
+
+> **For judges:** The login passwords are supplied separately with the private submission materials. Please do not publish the passwords in a public GitHub README.
+
+---
+
+## Brief Overview
+
+EventFlow AI connects customers and event planning companies through two role-specific portals backed by Supabase.
+
+- **Customer Portal:** Customers can register or log in, create event requests, track request status, and review approved AI-generated proposals, including Plan A and Plan B. They can also submit change requests.
+- **Business Portal:** Approved Business users can access customer requests, review AI-generated proposals, approve plans before customer viewing, and manage relevant event and supplier information.
+- **AI-assisted workflow:** RunPod-hosted Qwen3-8B generates proposal options from customer requirements. Business review happens before proposals are shared with customers.
+
+Customer registration and Business registration have different access requirements: Business users must receive administrator approval before using the Business Portal. Email verification and third-party sign-in behavior may depend on the current authentication configuration.
 
 ##  1. Problem Statement
 
@@ -423,11 +449,11 @@ Open the URL provided by Replit or the configured local development server.
 
 ### Step 6: Test the Workflow
 
-1. Register as a Customer.
+1. Sign in using the provided Customer demo account (or register a new Customer account).
 2. Create an event request.
 3. Submit the event requirements.
 4. Check whether AI proposal generation succeeds.
-5. Log in using a Business account.
+5. Log in using the pre-approved Business demo account (new Business registrations require administrator approval).
 6. Review Plan A and Plan B.
 7. Approve the proposal.
 8. Return to the Customer Portal.
