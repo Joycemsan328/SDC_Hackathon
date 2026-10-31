@@ -6,7 +6,7 @@ import { CUSTOMER_RESPONSE_WORKFLOW_ENABLED } from './customerResponses';
 import { canDisplayProposal, proposalDisplayStatus } from './proposalDisplay';
 import {
   ArrowLeft, ArrowRight, CalendarDays, Check, CheckCircle2, CircleHelp, ClipboardList,
-  Clock3, Flower2, Heart, LayoutDashboard, LogOut, MapPin, Menu, MessageSquareText,
+  Clock3, Flower2, Heart, LayoutDashboard, LogOut, MapPin, Menu,
   Plus, ShieldCheck, CircleUserRound, Sparkles, X,
 } from 'lucide-react';
 import { useCustomer, type CustomerEvent, type EventStatus, type Service } from './data';
@@ -35,7 +35,8 @@ function Button({ children, className = '', variant = 'primary', ...props }: But
 }
 function StatusBadge({ status, label }: { status: EventStatus; label?: string }) {
   const style = status === 'Approved for Customer' ? 'bg-[#e9f3ed] text-[#52745f]' : status === 'Customer Accepted' ? 'bg-[#e8f3ed] text-[#52745f]' : status === 'Changes Requested' ? 'bg-[#f5edf8] text-[#80648d]' : status === 'AI Draft' ? 'bg-[#f1edf7] text-[#80648d]' : 'bg-[#fbf1df] text-[#947745]';
-  return <span className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[11px] font-bold tracking-[.01em] ${style}`} data-testid={`status-event-${status.toLowerCase().replaceAll(' ', '-')}`}><span className="h-1.5 w-1.5 rounded-full bg-current opacity-75" />{label ?? status}</span>;
+  const displayLabel = label ?? (status === 'Changes Requested' ? 'In review' : status);
+  return <span className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[11px] font-bold tracking-[.01em] ${style}`} data-testid={`status-event-${status.toLowerCase().replaceAll(' ', '-')}`}><span className="h-1.5 w-1.5 rounded-full bg-current opacity-75" />{displayLabel}</span>;
 }
 function AppShell({ children }: { children: ReactNode }) {
   const [path] = useLocation();
@@ -244,21 +245,16 @@ function DetailSection({ icon, title, children }: { icon: ReactNode; title: stri
   return <section className="ef-card rounded-2xl p-5 sm:p-6"><div className="mb-4 flex items-center gap-3"><div className="flex h-9 w-9 items-center justify-center rounded-xl bg-[#f6edf3] text-[#a16e8a]">{icon}</div><h2 className="text-base font-bold text-[#574d5d]">{title}</h2></div>{children}</section>;
 }
 function EventDetail({ id }: { id?: string }) {
-  const { events, changeRequests, acceptProposal, preferProposal, requestChanges, submitCustomerResponse, remoteLoading, remoteError, customerResponseError, workflowError, generationNotices } = useCustomer();
+  const { events, acceptProposal, preferProposal, submitCustomerResponse, remoteLoading, remoteError, customerResponseError, workflowError, generationNotices } = useCustomer();
   const [, setLocation] = useLocation();
-  const [showChangeForm, setShowChangeForm] = useState(false);
-  const [changeText, setChangeText] = useState('');
   const [responsePlanId, setResponsePlanId] = useState<'A' | 'B' | null>(null);
   const [feedback, setFeedback] = useState('');
   const [actionError, setActionError] = useState('');
   const [actionBusy, setActionBusy] = useState(false);
   const actionLock = useRef(false);
   const event = events.find((item) => item.id === id);
-  const requests = changeRequests.filter((request) => request.eventId === id);
   useEffect(() => {
     setResponsePlanId(null);
-    setShowChangeForm(false);
-    setChangeText('');
     setActionError('');
     setFeedback('');
   }, [id]);
@@ -296,24 +292,6 @@ function EventDetail({ id }: { id?: string }) {
       setActionError(error instanceof Error ? error.message : 'Your selection could not be saved.');
     } finally { actionLock.current = false; setActionBusy(false); }
   };
-  const submitChanges = async (formEvent: FormEvent) => {
-    formEvent.preventDefault();
-    if (!changeText.trim() || event.status === 'Customer Accepted' || actionLock.current) return;
-    actionLock.current = true; setActionBusy(true); setActionError('');
-    try {
-      if (event.requestSource === 'supabase') {
-        if (!CUSTOMER_RESPONSE_WORKFLOW_ENABLED) throw new Error("Change Requests are unavailable until the response workflow is approved.");
-        await submitCustomerResponse(event.id, { kind: 'change_request', feedback: changeText.trim() });
-      } else {
-        await requestChanges(event.id, changeText.trim());
-      }
-      setShowChangeForm(false); setChangeText('');
-      setFeedback(event.requestSource === 'supabase'
-        ? 'Your Change Request was sent to Business. Existing plans are unchanged; no AI generation was started.'
-        : 'Update saved in this demo.');
-    } catch (error) { setActionError(error instanceof Error ? error.message : 'Your changes could not be submitted.'); }
-    finally { actionLock.current = false; setActionBusy(false); }
-  };
   return <div className="ef-enter">
     <button onClick={() => setLocation('/events')} className="mb-5 inline-flex items-center gap-2 text-xs font-bold text-[#8c7d8e] hover:text-[#9c5f7d]" data-testid="button-back-to-events"><ArrowLeft size={15} />Back to my events</button>
     {remoteError && <p role="alert" className="mb-4 rounded-xl border border-[#efcfd1] bg-[#fff4f4] px-4 py-3 text-xs text-[#a34e58]" data-testid="status-customer-data-error">{remoteError}</p>}
@@ -326,7 +304,6 @@ function EventDetail({ id }: { id?: string }) {
     {!canViewProposal && <div role={proposalStatus.state === 'error' ? 'alert' : 'status'} className="mb-5 rounded-2xl border border-[#eadfc8] bg-[#fbf6eb] p-5 sm:p-6" data-testid="status-saved-proposal" data-proposal-state={proposalStatus.state}>
       <h2 className="text-sm font-bold text-[#66583e]">{proposalStatus.title}</h2>
       <p className="mt-2 text-xs leading-relaxed text-[#8f805f]">{proposalStatus.description}</p>
-      {event.workflow?.change_message && <p className="mt-2 whitespace-pre-wrap text-xs">Your change request: {event.workflow.change_message}</p>}
     </div>}
     <div className="grid gap-4 lg:grid-cols-[1fr_340px]">
       <div className="space-y-4">
@@ -335,45 +312,21 @@ function EventDetail({ id }: { id?: string }) {
           <div className="mt-5 border-t border-[#f0eaf0] pt-4"><div className="mb-2 text-[10px] font-bold uppercase tracking-[.1em] text-[#a097a4]">Services you’re interested in</div><div className="flex flex-wrap gap-2">{event.services.length ? event.services.map((service) => <span key={service} className="rounded-full bg-[#f6f0f5] px-3 py-1.5 text-xs font-semibold text-[#7d6d81]">{service}</span>) : <span className="text-xs text-[#958b98]">No specific services selected</span>}</div></div>
           {event.requirements && <div className="mt-5 border-t border-[#f0eaf0] pt-4"><div className="mb-2 text-[10px] font-bold uppercase tracking-[.1em] text-[#a097a4]">Additional requirements</div><p className="text-sm leading-relaxed text-[#756b7a]" data-testid="text-event-requirements">{event.requirements}</p></div>}
         </DetailSection>
-         {event.status !== 'Customer Accepted' && <DetailSection icon={<MessageSquareText size={17} />} title={event.requestSource === 'supabase' ? 'Change Request' : 'Update your request'}>
-          <p className="mb-3 text-sm leading-relaxed text-[#817586]">Have a new idea? Tell us what you would like to add or change. Your original event request stays the same until the planning team reviews this update.</p>
-           {event.requestSource === 'supabase' && event.customerResponse
-             ? <p className="text-xs text-[#8b818e]">A response is already saved for this proposal revision. Business has received it.</p>
-             : event.requestSource === 'supabase' && !CUSTOMER_RESPONSE_WORKFLOW_ENABLED
-               ? <p className="text-xs text-[#8b818e]" data-testid="customer-response-disabled">Customer responses are disabled until the database migration and security review are approved.</p>
-               : event.requestSource === 'supabase' && event.status !== 'Approved for Customer'
-                 ? <p className="text-xs text-[#8b818e]">Change Requests are available after Business releases both plans.</p>
-                 : !showChangeForm
-                   ? <Button variant="outline" onClick={() => setShowChangeForm(true)} data-testid="button-update-request"><Plus size={16} />{event.requestSource === 'supabase' ? 'Submit a Change Request' : 'Add a new update'}</Button>
-                   : <form onSubmit={submitChanges} className="rounded-xl border border-[#eee4ec] bg-[#fdfafb] p-4" data-testid="form-update-request">
-            <label className="text-xs font-bold text-[#655b69]" htmlFor="update-request">What would you like to update?</label>
-             <textarea id="update-request" value={changeText} onChange={(e) => setChangeText(e.target.value)} required maxLength={event.requestSource === 'supabase' ? 4000 : 2000} rows={4} className={`${inputClass} py-3`} placeholder="e.g. Please change the theme to Garden Party, increase to 50 guests, and include photography." data-testid="textarea-update-request" />
-             <p className="mt-2 text-[11px] text-[#988e9b]">{event.requestSource === 'supabase' ? 'This sends feedback to Business for review. It does not change your request or generate another AI proposal.' : 'Demo update only.'}</p>
-             <div className="mt-3 flex justify-end gap-2"><Button type="button" variant="quiet" disabled={actionBusy} onClick={() => { setShowChangeForm(false); setChangeText(''); }} data-testid="button-cancel-update">Cancel</Button><Button type="submit" disabled={actionBusy || !changeText.trim()} data-testid="button-submit-update">{actionBusy ? 'Sending…' : event.requestSource === 'supabase' ? 'Submit Change Request' : 'Submit changes'} <ArrowRight size={14} /></Button></div>
-          </form>}
-        </DetailSection>}
         {canViewProposal && event.proposal && <DetailSection icon={<Sparkles size={17} />} title={isPendingBusinessApproval ? 'Compare your AI draft plans' : isAiDraft ? 'Compare your AI draft plans' : 'Compare your approved plans'}>
           <div className={`mb-4 rounded-xl px-4 py-3 text-xs leading-relaxed ${isAiDraft || isPendingBusinessApproval ? 'border border-[#e6d9ef] bg-[#f7f2fa] text-[#705d7f]' : 'bg-[#f7eff4] text-[#7e6c80]'}`} data-testid={isPendingBusinessApproval ? 'status-proposal-pending-business-approval' : isAiDraft ? 'status-ai-draft-not-approved' : 'status-approved-proposal'}>{isPendingBusinessApproval ? <><strong>Saved AI draft — not a confirmed quotation.</strong> Compare your existing Plan A and Plan B below. No proposals are generated when viewing or selecting a plan.</> : isAiDraft ? <><strong>Unapproved AI Draft — Demo Only.</strong> These AI-generated plans are for development/demo review only and cannot be accepted until the planning team approves them.</> : 'Review these saved options, assumptions, and unconfirmed costs before choosing.'}</div>
            {event.proposal.source === 'persisted-ai' && <div role="status" className="mb-4 rounded-xl border border-[#e6d9ef] bg-[#f7f2fa] px-4 py-3 text-xs leading-relaxed text-[#705d7f]" data-testid="status-plan-selection">
              <strong>{event.customerResponse?.response_kind === 'selection'
                ? `Customer selected Plan ${event.customerResponse.selected_proposal_id === event.customerResponse.plan_a_id ? 'A' : 'B'}`
-               : event.customerResponse?.response_kind === 'change_request'
-                 ? 'Change Request sent to Business'
-                 : event.preferredPlanId
+               : event.preferredPlanId
                    ? `Selected Plan ${event.preferredPlanId}${SUBMISSION_MVP ? ' — demo-only browser preference.' : ' — saved to Supabase.'}`
                    : proposalStatus.title}</strong>{' '}
              {event.customerResponse
                ? `Saved ${new Date(event.customerResponse.responded_at).toLocaleString()}. This is not a booking.`
                : CUSTOMER_RESPONSE_WORKFLOW_ENABLED
-                 ? 'Choose a plan and confirm your selection, or send feedback to Business. No booking or AI regeneration is triggered.'
+                  ? 'Choose a plan and confirm your selection. No booking or AI regeneration is triggered.'
                  : SUBMISSION_MVP
                    ? 'This response workflow is disabled pending database approval. Existing browser-only choices are demo preferences, not bookings.'
-                   : 'Choose a released plan or request changes to start a new revision.'}
-           </div>}
-           {event.customerResponse?.response_kind === 'change_request' && <div className="mb-4 rounded-xl border border-[#e7dfe9] bg-[#fbf8fc] p-4 text-sm" data-testid="status-customer-change-request">
-             <h3 className="font-bold text-[#594f5e]">Your Change Request</h3>
-             <p className="mt-2 whitespace-pre-wrap leading-relaxed text-[#756b7a]">{event.customerResponse.feedback}</p>
-             <p className="mt-2 text-[10px] text-[#a097a4]">Sent {new Date(event.customerResponse.responded_at).toLocaleString()}</p>
+                    : 'Choose a released plan and confirm your selection.'}
            </div>}
           {event.selection && event.selection.decision !== 'pending' && <div className="mb-4 rounded-xl border border-[#d6e8dc] bg-[#f2f8f4] px-4 py-3 text-sm text-[#56765f]" data-testid="status-business-decision"><strong>Business {event.selection.decision === 'approved' ? 'approved' : 'requested changes to'} Plan {event.selection.plan_key}</strong>{event.selection.message && <p className="mt-2 whitespace-pre-wrap" data-testid="text-business-message">{event.selection.message}</p>}<p className="mt-2 text-xs">Saved {event.selection.reviewed_at ? new Date(event.selection.reviewed_at).toLocaleString() : ''}. Decisions refresh automatically every 10 seconds.</p></div>}
           <div className="grid gap-4 xl:grid-cols-2">{event.proposal.plans.map((plan) => {
@@ -405,9 +358,6 @@ function EventDetail({ id }: { id?: string }) {
             <Button onClick={() => void confirmSavedSelection()} className="mt-3 w-full" disabled={actionBusy} data-testid="button-confirm-customer-selection">{actionBusy ? 'Saving selection…' : 'Confirm Selection'}</Button>
           </div>}
           {event.status === 'Customer Accepted' && <div className="mt-4 flex items-center gap-2 rounded-xl bg-[#edf5ef] px-4 py-3 text-sm font-semibold text-[#587660]" data-testid="status-proposal-accepted"><CheckCircle2 size={17} />Plan {event.acceptedPlanId} accepted</div>}
-        </DetailSection>}
-        {requests.length > 0 && <DetailSection icon={<MessageSquareText size={17} />} title="Your request updates">
-          <div className="space-y-3">{requests.map((request) => <div key={request.id} className="rounded-xl border border-[#eee7ef] bg-[#fdfbfc] p-4" data-testid={`card-change-request-${request.id}`}><p className="text-sm leading-relaxed text-[#6c6270]">{request.message}</p><p className="mt-2 text-[10px] font-semibold uppercase tracking-[.1em] text-[#a398a5]">Added {new Date(request.createdAt).toLocaleDateString('en-MY', { day: 'numeric', month: 'short', year: 'numeric' })}</p></div>)}</div>
         </DetailSection>}
       </div>
       <aside className="space-y-4">

@@ -59,7 +59,7 @@ test("lost-response idempotent retries may return the original operation key", (
   }, selection.customer_id));
 });
 
-test("enabled customer responses use the owner-checking RPC and display in Business", () => {
+test("customer selection uses the owner-checking RPC while Change Request UI stays hidden", () => {
   const service = readFileSync(new URL("../src/customer/customerResponses.ts", import.meta.url), "utf8");
   const customer = readFileSync(new URL("../src/customer/data.tsx", import.meta.url), "utf8");
   const portal = readFileSync(new URL("../src/customer/Portal.tsx", import.meta.url), "utf8");
@@ -69,7 +69,9 @@ test("enabled customer responses use the owner-checking RPC and display in Busin
   assert.match(service, /supabase\.rpc\("eventflow_submit_customer_response"/);
   assert.doesNotMatch(service, /\.from\(["']eventflow_customer_responses["']\)\s*\.\s*(insert|update|delete)\s*\(/);
   assert.match(portal, /kind:\s*'selection'/);
-  assert.match(portal, /kind:\s*'change_request'/);
+  assert.match(portal, /button-confirm-customer-selection/);
+  assert.doesNotMatch(portal, /button-update-request|form-update-request|textarea-update-request|button-submit-update/);
+  assert.doesNotMatch(portal, /Change Request|Your request updates|Your change request:/);
   assert.match(customer, /\.from\("eventflow_customer_responses"\)/);
   assert.match(business, /\.from\("eventflow_customer_responses"\)/);
   assert.match(business, /Customer selected Plan/);
