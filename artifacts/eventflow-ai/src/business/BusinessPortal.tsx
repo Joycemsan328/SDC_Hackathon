@@ -1026,7 +1026,7 @@ function App() {
   };
   const updateRequest = (id: string, patch: Partial<Req>) => {
     if (supabaseRequests.some((request) => request.id === id)) {
-      flash("Saved requests are read-only in this version.");
+      flash("This saved request cannot be edited here.");
       return;
     }
     setStore((s) => ({
@@ -1068,7 +1068,7 @@ function App() {
   };
   const createProposal = (r: Req) => {
     if (r.source === "supabase") {
-      flash("Actions for saved requests will be connected in a later update.");
+      flash("Proposal actions are unavailable from this saved request.");
       return;
     }
     const exists = store.proposals.find((p) => p.requestId === r.id);
@@ -1427,7 +1427,6 @@ const approveProposal = async (p: Proposal): Promise<boolean> => {
                           openModal={setModal}
                           requestFetchState={requestFetchState}
                           requestFetchError={requestFetchError}
-                          supabaseRequestCount={supabaseRequests.length}
                         />
                     </Route>
                     <Route path="/requests/:id">
@@ -1444,7 +1443,6 @@ const approveProposal = async (p: Proposal): Promise<boolean> => {
                           setLocation={setLocation}
                           proposalFetchState={proposalFetchState}
                           proposalFetchError={proposalFetchError}
-                          supabaseProposalCount={supabaseProposals.length}
                           customerResponseError={customerResponseError}
                         />
                     </Route>
@@ -1735,26 +1733,17 @@ function Metric({ label, value, detail, icon: Icon, tone = "lavender", href }: a
     </Link>
   );
 }
-function RequestFetchNotice({ state, error, count }: {
+function RequestFetchNotice({ state, error }: {
   state: "idle" | "loading" | "loaded" | "error";
   error: string;
-  count: number;
 }) {
-  if (state === "idle") return null;
-  const message = state === "loading"
-    ? "Loading saved customer requests from Supabase. Demo samples remain available below."
-    : state === "error"
-      ? `Could not refresh live requests from Supabase: ${error}. Previously loaded requests may be out of date. Demo samples are shown separately.`
-      : count === 0
-        ? "No saved customer requests were found in Supabase. Demo samples are still shown separately."
-        : `${count} saved ${count === 1 ? "request" : "requests"} loaded from Supabase. Demo samples are labelled separately.`;
+  if (state === "idle" || state === "loaded") return null;
+  if (state === "loading") {
+    return <p className="mb-3 text-[11px] text-[#827889]" role="status" data-testid="status-supabase-requests">Refreshing requests…</p>;
+  }
   return (
-    <div
-      role={state === "error" ? "alert" : "status"}
-      className={`mb-4 rounded-xl border px-4 py-3 text-xs ${state === "error" ? "border-[#efcfd1] bg-[#fff4f4] text-[#a34e58]" : "border-[#e7dfe9] bg-[#fbf8fc] text-[#74677b]"}`}
-      data-testid="status-supabase-requests"
-    >
-      {message}
+    <div role="alert" className="mb-4 rounded-xl border border-[#efcfd1] bg-[#fff4f4] px-4 py-3 text-xs text-[#a34e58]" data-testid="status-supabase-requests">
+      Requests could not be refreshed{error ? `: ${error}` : ""}. Previously loaded requests remain visible. Refresh the page to try again.
     </div>
   );
 }
@@ -1804,7 +1793,7 @@ function Dashboard({ store, setLocation, openModal, requestFetchState, recentlyU
           tone="rose"
         />
         <Metric
-          label="Confirmed events"
+          label="Demo events"
           href="/events"
           value={
             store.events.filter(
@@ -1812,7 +1801,7 @@ function Dashboard({ store, setLocation, openModal, requestFetchState, recentlyU
                 e.status === "Upcoming" || e.status === "Ongoing",
             ).length
           }
-          detail="Dates reserved in your calendar"
+          detail="Sample records only"
           icon={CalendarCheck}
           tone="sage"
         />
@@ -1868,24 +1857,24 @@ function Dashboard({ store, setLocation, openModal, requestFetchState, recentlyU
               </div>
               <div className="pl-4">
                 <p className="text-[10px] font-semibold text-[#99909f]">
-                  THIS MONTH
+                  SAMPLE EVENTS
                 </p>
                 <p className="mt-1 text-[12px] font-bold">
                   {store.events.length} events
                 </p>
                 <p className="mt-1 text-[10px] text-[#9b919f]">
-                  Across your studio
+                  Sample records only
                 </p>
               </div>
               <div className="pl-4">
                 <p className="text-[10px] font-semibold text-[#99909f]">
-                  SUPPLIER PARTNERS
+                  SAMPLE SUPPLIERS
                 </p>
                 <p className="mt-1 text-[12px] font-bold">
-                  {store.suppliers.length} trusted
+                  {store.suppliers.length} samples
                 </p>
                 <p className="mt-1 text-[10px] text-[#9b919f]">
-                  Ready to make it happen
+                  Not verified partners
                 </p>
               </div>
             </div>
@@ -1926,7 +1915,7 @@ function Dashboard({ store, setLocation, openModal, requestFetchState, recentlyU
                       </span>
                       <span className="text-[10px] text-[#a79eaa]">{r.id}</span>
                       <span className="rounded-full bg-[#f6f1f5] px-2 py-0.5 text-[9px] font-semibold text-[#817486]">
-                        {r.source === "supabase" ? "Saved request" : "Demo sample"}
+                        {r.source === "supabase" ? "Customer request" : "Demo sample"}
                       </span>
                     </div>
                     <p className="mt-1 truncate text-[10px] text-[#968d9a]">
@@ -1983,6 +1972,7 @@ function Dashboard({ store, setLocation, openModal, requestFetchState, recentlyU
                       <div className="truncate text-[12px] font-bold">
                         {e.name}
                       </div>
+                      {e.source !== "supabase" && <span className="mt-1 inline-block rounded-full bg-[#f2eff3] px-2 py-0.5 text-[9px] font-bold text-[#827588]">Demo sample</span>}
                       <p className="mt-1 truncate text-[10px] text-[#968b9c]">
                         {e.customer} · {e.time}
                       </p>
@@ -2068,7 +2058,7 @@ function Empty({ title, action, cta = "Add new" }: any) {
     </div>
   );
 }
-function Requests({ store, setLocation, openModal, requestFetchState, requestFetchError, supabaseRequestCount }: any) {
+function Requests({ store, setLocation, openModal, requestFetchState, requestFetchError }: any) {
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("All");
   const requestHeading = (request: Req) => {
@@ -2097,7 +2087,7 @@ function Requests({ store, setLocation, openModal, requestFetchState, requestFet
           </Button>
         }
       />
-      <RequestFetchNotice state={requestFetchState} error={requestFetchError} count={supabaseRequestCount} />
+      <RequestFetchNotice state={requestFetchState} error={requestFetchError} />
       <Panel className="overflow-hidden">
         <div className="flex flex-col gap-3 border-b border-[#f0ebf1] p-4 md:flex-row md:items-center md:justify-between">
           <div className="relative w-full md:max-w-[340px]">
@@ -2159,7 +2149,7 @@ function Requests({ store, setLocation, openModal, requestFetchState, requestFet
                   <td className="px-5 py-4">
                     <div className="text-[12px] font-bold">{requestHeading(r)}</div>
                     <div className="mt-1 text-[10px] text-[#9a919f]">
-                      {r.id} · {r.name} · {r.source === "supabase" ? "Saved request" : "Demo sample"}
+                      {r.id} · {r.name} · {r.source === "supabase" ? "Customer request" : "Demo sample"}
                     </div>
                   </td>
                   <td className="px-4 py-4 text-[11px] text-[#756b7c]">
@@ -2199,7 +2189,7 @@ function Requests({ store, setLocation, openModal, requestFetchState, requestFet
                 <div>
                   <div className="text-[12px] font-bold">{requestHeading(r)}</div>
                   <p className="mt-1 text-[10px] text-[#968b9b]">
-                    {r.name} · {r.id} · {r.source === "supabase" ? "Saved request" : "Demo sample"}
+                    {r.name} · {r.id} · {r.source === "supabase" ? "Customer request" : "Demo sample"}
                   </p>
                 </div>
                 <Status value={r.status} />
@@ -2243,7 +2233,7 @@ function RequestDetail({
         eyebrow={`Request ${r.id}`}
         title={r.name}
         subtitle={`${r.type} · received ${dateLabel(r.date, { day: "numeric", month: "long" })}`}
-        action={<div className="flex items-center gap-2"><span className="rounded-full bg-[#f6f1f5] px-2.5 py-1 text-[10px] font-semibold text-[#817486]">{r.source === "supabase" ? "Saved request" : "Demo sample"}</span><Status value={r.status} /></div>}
+        action={<div className="flex items-center gap-2"><span className="rounded-full bg-[#f6f1f5] px-2.5 py-1 text-[10px] font-semibold text-[#817486]">{r.source === "supabase" ? "Customer request" : "Demo sample"}</span><Status value={r.status} /></div>}
       />
       <div className="grid gap-5 lg:grid-cols-[1.5fr_1fr]">
         <div className="space-y-5">
@@ -2313,7 +2303,7 @@ function RequestDetail({
             </div>
             {r.source === "supabase" ? (
               <p className="rounded-xl border border-[#e7dfe9] bg-[#fbf8fc] p-4 text-[11px] leading-relaxed text-[#74677b]" role="note">
-                This saved customer request is read-only. Status updates and proposal actions will be connected in a later update.
+                This saved request can be reviewed here, but editing and proposal actions are unavailable in this view.
               </p>
             ) : <>
             <p className="mb-5 text-[11px] leading-relaxed text-[#877d8b]">
@@ -2401,26 +2391,21 @@ function RequestDetail({
     </div>
   );
 }
-function ProposalFetchNotice({ state, error, count }: {
+function ProposalFetchNotice({ state, error }: {
   state: "idle" | "loading" | "loaded" | "error";
   error: string;
-  count: number;
 }) {
-  if (state === "idle") return null;
-  const message = state === "loading"
-    ? "Loading saved proposals from Supabase. Demo proposals remain available below."
-    : state === "error"
-      ? `Could not refresh saved proposals from Supabase: ${error}. Previously loaded proposals may be out of date. Demo proposals are shown separately.`
-      : count === 0
-        ? "No saved proposals were found in Supabase. Demo proposals are still shown separately."
-        : `${count} saved ${count === 1 ? "proposal" : "proposals"} loaded from Supabase. Demo proposals are labelled separately.`;
+  if (state === "idle" || state === "loaded") return null;
+  if (state === "loading") {
+    return <p className="mb-3 text-[11px] text-[#827889]" role="status" data-testid="status-supabase-proposals">Refreshing proposals…</p>;
+  }
   return (
-    <div role={state === "error" ? "alert" : "status"} className={`mb-4 rounded-xl border px-4 py-3 text-xs ${state === "error" ? "border-[#efcfd1] bg-[#fff4f4] text-[#a34e58]" : "border-[#e7dfe9] bg-[#fbf8fc] text-[#74677b]"}`} data-testid="status-supabase-proposals">
-      {message}
+    <div role="alert" className="mb-4 rounded-xl border border-[#efcfd1] bg-[#fff4f4] px-4 py-3 text-xs text-[#a34e58]" data-testid="status-supabase-proposals">
+      Proposals could not be refreshed{error ? `: ${error}` : ""}. Previously loaded proposals remain visible. Refresh the page to try again.
     </div>
   );
 }
-function Proposals({ store, setLocation, proposalFetchState, proposalFetchError, supabaseProposalCount, customerResponseError }: any) {
+function Proposals({ store, setLocation, proposalFetchState, proposalFetchError, customerResponseError }: any) {
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("All");
   const list = store.proposals.filter(
@@ -2465,7 +2450,7 @@ function Proposals({ store, setLocation, proposalFetchState, proposalFetchError,
           </button>
         ))}
       </div>
-      <ProposalFetchNotice state={proposalFetchState} error={proposalFetchError} count={supabaseProposalCount} />
+      <ProposalFetchNotice state={proposalFetchState} error={proposalFetchError} />
       {customerResponseError && <p role="alert" className="mb-4 rounded-xl border border-[#efcfd1] bg-[#fff4f4] p-4 text-xs text-[#a34e58]" data-testid="status-customer-response-error">{customerResponseError}</p>}
       <div className="mb-4 relative max-w-sm">
         <Search
@@ -2511,7 +2496,7 @@ function ProposalCard({ proposal: p, setLocation }: any) {
           <div className="flex items-start justify-between gap-2">
             <div>
               <div className="text-[10px] font-bold uppercase tracking-[.13em] text-[#a181a6]">
-                {p.source === "supabase" ? "Saved proposal · " : ""}{p.planKey ? `Plan ${p.planKey} · ` : ""}{p.id} · {p.type}
+                {p.source === "demo" ? "Demo sample · " : ""}{p.planKey ? `Plan ${p.planKey} · ` : ""}{p.id} · {p.type}
               </div>
               <h2 className="serif mt-1 text-[20px]">{p.event}</h2>
               <p className="mt-1 text-[11px] text-[#8a7f91]">
@@ -2523,7 +2508,7 @@ function ProposalCard({ proposal: p, setLocation }: any) {
                 })}
               </p>
               {p.source === "supabase" && (
-                <p className="mt-1 text-[10px] text-[#817486]">{p.customerSelectedForReview ? `Customer selected Plan ${p.planKey} · saved to Supabase` : "Saved proposal · not selected for review"} · Request {p.requestId}</p>
+                <p className="mt-1 text-[10px] text-[#817486]">{p.customerSelectedForReview ? `Customer selected Plan ${p.planKey}` : "Not selected by the customer"} · Request {p.requestId}</p>
               )}
               {CUSTOMER_RESPONSE_WORKFLOW_ENABLED && p.customerResponse && <p className="mt-1 text-[10px] font-bold text-[#64806b]" data-testid={`text-customer-response-${p.id}`}>
                 {p.customerResponse.response_kind === "selection"
@@ -2842,16 +2827,6 @@ function ProposalDetail({ store, saveProposal, approve, reviewSelection, accept,
                 </Button>
               ) : null}
 
-              {p.status === "Awaiting Customer" ? (
-                <Button
-                  variant="outline"
-                  onClick={() => accept(p)}
-                  testid="button-accept-proposal"
-                >
-                  <Check size={14} />
-                  Accept Proposal (Customer Demo)
-                </Button>
-              ) : null}
             </div>
             <button
               onClick={() => {
@@ -2913,14 +2888,14 @@ function SavedProposalDetail({ proposal: p, request, reviewSelection, customerRe
         <ArrowLeft size={15} /> All proposals
       </Link>
       <PageHeading
-        eyebrow={`Saved proposal${p.planKey ? ` · Plan ${p.planKey}` : ""} · ${p.id}`}
+        eyebrow={`${p.source === "demo" ? "Demo sample · " : ""}${p.planKey ? `Plan ${p.planKey} · ` : ""}${p.id}`}
         title={content?.title || p.event}
         subtitle={`Prepared for ${p.customer} · ${dateLabel(p.date)} · Request ${p.requestId}`}
         action={<Status value={p.status} />}
       />
       <div className="mb-4 rounded-xl border border-[#e7dfe9] bg-[#fbf8fc] px-4 py-3 text-xs text-[#74677b]" role="note">
         {p.customerSelectedForReview
-          ? `Customer selected Plan ${p.planKey} for review. This choice is saved in Supabase and available across devices.`
+          ? `Customer selected Plan ${p.planKey}. Their choice is available to the studio.`
           : "Business reviews both plans and releases the pair first. After Customer selection, Business confirms the final choice."}
       </div>
       <div className="grid gap-5 xl:grid-cols-[1.55fr_1fr]">
@@ -2929,7 +2904,7 @@ function SavedProposalDetail({ proposal: p, request, reviewSelection, customerRe
             <SectionTitle>Event concept</SectionTitle>
             {content?.concept && <p className="mt-2 text-[12px] leading-relaxed text-[#756b7b]">{content.concept}</p>}
             {content?.theme && <div className="mt-4"><p className="text-[10px] font-bold uppercase tracking-[.1em] text-[#a197a5]">Theme</p><p className="mt-1 text-[12px] text-[#756b7b]">{content.theme}</p></div>}
-            {!content?.concept && !content?.theme && <p className="mt-2 text-[11px] text-[#968d9a]">No full plan content was saved for this proposal.</p>}
+            {!content?.concept && !content?.theme && <p className="mt-2 text-[11px] text-[#968d9a]">Plan details are not available for this proposal.</p>}
           </Panel>
           {content?.timeline && content.timeline.length > 0 && (
             <Panel className="p-5 md:p-6">
@@ -3101,7 +3076,7 @@ function ApprovalCard({ p, approve, reviewSelection, saveProposal, setLocation, 
           <Moodboard type={p.type} />
           <div>
             <div className="text-[9px] font-bold uppercase tracking-[.14em] text-[#a181a6]">
-              {isSaved ? `Saved Plan ${p.planKey ?? "?"} · ${p.id}` : `${p.id} · Demo · ${p.type}`}
+              {isSaved ? `Plan ${p.planKey ?? "?"} · ${p.id}` : `${p.id} · Demo sample · ${p.type}`}
             </div>
             <h2 className="serif mt-1 text-[19px]">{p.event}</h2>
             <p className="mt-1 text-[11px] text-[#8c8190]">
@@ -3113,7 +3088,7 @@ function ApprovalCard({ p, approve, reviewSelection, saveProposal, setLocation, 
                 of {money(p.budget)} budget
               </span>
             </p>
-            {isSaved && p.customerSelectedForReview && <p className="mt-2 text-[10px] font-bold text-[#64806b]" data-testid={`text-selected-plan-${p.id}`}>Customer-selected Plan {p.planKey} · saved to Supabase</p>}
+            {isSaved && p.customerSelectedForReview && <p className="mt-2 text-[10px] font-bold text-[#64806b]" data-testid={`text-selected-plan-${p.id}`}>Customer selected Plan {p.planKey}</p>}
           </div>
         </div>
         <Button
@@ -3138,7 +3113,7 @@ function ApprovalCard({ p, approve, reviewSelection, saveProposal, setLocation, 
             key={k}
             onClick={() => toggle(k)}
             disabled={isSaved}
-            title={isSaved ? "Saved proposal checklist editing is not connected yet" : undefined}
+            title={isSaved ? "Checklist editing is unavailable for saved proposals." : undefined}
             className={`flex items-center gap-1.5 rounded-full border px-3 py-2 text-[10px] font-semibold ${checklist[k as keyof typeof checklist] ? "border-[#d8e9dc] bg-[#eff7f0] text-[#548064]" : "border-[#eee7ef] bg-white text-[#968b9a]"}`}
             data-testid={`button-approval-check-${k}`}
           >
@@ -3199,7 +3174,6 @@ function Events({ store, setLocation, eventFetchState, eventFetchError, venueNam
       <EventDataStatus
         state={eventFetchState}
         error={eventFetchError}
-        eventCount={store.events.filter((event: EventItem) => event.source === "supabase").length}
         venueNamesUnavailable={venueNamesUnavailable}
       />
       <PageHeading
@@ -3263,7 +3237,7 @@ function Events({ store, setLocation, eventFetchState, eventFetchError, venueNam
                     {e.name}
                   </span>
                   <Status value={e.status} />
-                  {e.source === "demo" && <span className="rounded-full bg-[#f2eff3] px-2 py-1 text-[9px] font-bold text-[#827588]">Demo</span>}
+                  {e.source === "demo" && <span className="rounded-full bg-[#f2eff3] px-2 py-1 text-[9px] font-bold text-[#827588]">Demo sample</span>}
                 </div>
                 <p className="mt-1 text-[10px] text-[#918695]">
                   {e.customer} · {e.id}
@@ -3298,7 +3272,7 @@ function EventsWithCreate({ store, setLocation, openModal, eventFetchState, even
       <div className="mb-3 flex justify-end">
         <Button
           disabled
-          title="Supabase event creation will be available in Phase 3B."
+          title="Event creation is unavailable from this page."
           onClick={() => openModal({ kind: "event" })}
           testid="button-create-event"
         >
@@ -3325,7 +3299,6 @@ function EventDetail({ store, setLocation, updateEvent, eventFetchState, eventFe
       <EventDataStatus
         state={eventFetchState === "idle" ? "loading" : eventFetchState}
         error={eventFetchError}
-        eventCount={store.events.filter((event: EventItem) => event.source === "supabase").length}
       />
     );
   }
@@ -3335,7 +3308,6 @@ function EventDetail({ store, setLocation, updateEvent, eventFetchState, eventFe
       <EventDataStatus
         state={eventFetchState}
         error={eventFetchError}
-        eventCount={store.events.filter((event: EventItem) => event.source === "supabase").length}
       />
       <button
         onClick={() => setLocation("/events")}
@@ -3345,7 +3317,7 @@ function EventDetail({ store, setLocation, updateEvent, eventFetchState, eventFe
         <ArrowLeft size={15} /> All events
       </button>
       <PageHeading
-        eyebrow={`${e.id} · ${e.type}${e.source === "demo" ? " · Demo" : ""}`}
+        eyebrow={`${e.id} · ${e.type}${e.source === "demo" ? " · Demo sample" : ""}`}
         title={e.name}
         subtitle={`A celebration for ${e.customer}`}
         action={<Status value={e.status} />}
@@ -3403,7 +3375,7 @@ function EventDetail({ store, setLocation, updateEvent, eventFetchState, eventFe
             value={e.status}
             onChange={(ev) => updateEvent(e.id, ev.target.value)}
             disabled={e.source === "supabase"}
-            title={e.source === "supabase" ? "Live Event editing will be available in Phase 3B." : undefined}
+            title={e.source === "supabase" ? "Live event status updates are unavailable here." : undefined}
             className="h-10 w-full rounded-xl border border-[#eee7ef] bg-white px-3 text-[12px]"
             data-testid="select-event-status"
           >
@@ -3411,7 +3383,7 @@ function EventDetail({ store, setLocation, updateEvent, eventFetchState, eventFe
               <option key={s}>{s}</option>
             ))}
           </select>
-          {e.source === "supabase" && <p className="mt-2 text-[10px] text-[#95899a]">Live Event status changes will be connected in Phase 3B.</p>}
+          {e.source === "supabase" && <p className="mt-2 text-[10px] text-[#95899a]">Live event status updates are unavailable here.</p>}
           <div className="mt-5 rounded-xl bg-[#f8f3f9] p-4">
             <p className="text-[10px] font-bold uppercase tracking-[.12em] text-[#9a7ca0]">
               Reserved calendar slot
@@ -3724,9 +3696,9 @@ function Suppliers({ store, openModal, setStore }: any) {
   return (
     <div className="fade-in">
       <PageHeading
-        eyebrow="Your trusted circle"
+        eyebrow="Sample listings"
         title="Supplier catalogue"
-        subtitle="The people and packages that make every gathering feel like yours."
+        subtitle="Sample supplier data; these listings are not verified partners."
         action={
           <Button
             onClick={() => openModal({ kind: "supplier" })}
@@ -3875,7 +3847,7 @@ function Reports({ store }: any) {
       <PageHeading
         eyebrow="The bigger picture"
         title="Studio reports"
-        subtitle="A clear view of your momentum, your best-fit events and the business behind the beautiful details."
+        subtitle="Illustrative figures for demonstration only; these are not actual studio results."
         action={
           <Button
             variant="outline"
@@ -3921,7 +3893,7 @@ function Reports({ store }: any) {
           <SectionTitle
             aside={
               <span className="rounded-full bg-[#f7f1f8] px-2.5 py-1 text-[9px] font-bold text-[#866790]">
-                Last 6 months
+                Illustrative Data
               </span>
             }
           >
@@ -3965,12 +3937,19 @@ function Reports({ store }: any) {
             </div>
           </div>
           <div className="mt-8 rounded-xl bg-[#f8f4f9] p-3 text-[10px] text-[#817386]">
-            <ArrowDownRight size={13} className="mr-1 inline text-[#866294]" />{" "}
-            Request volume is up across the latest studio period.
+            Illustrative trend only; not actual request volume.
           </div>
         </Panel>
         <Panel className="p-5 md:p-6">
-          <SectionTitle>Event type mix</SectionTitle>
+          <SectionTitle
+            aside={
+              <span className="rounded-full bg-[#f7f1f8] px-2.5 py-1 text-[9px] font-bold text-[#866790]">
+                Illustrative Data
+              </span>
+            }
+          >
+            Event type mix
+          </SectionTitle>
           <div className="space-y-4 pt-2">
             {typeCounts.map((t, i) => (
               <div key={t.name} data-testid={`report-type-${i}`}>
@@ -4001,7 +3980,7 @@ function Reports({ store }: any) {
       <Panel className="mt-5 p-5 md:p-6">
         <SectionTitle
           aside={
-            <span className="text-[10px] text-[#9b919e]">RM thousands</span>
+            <span className="text-[10px] text-[#9b919e]">Illustrative Data · RM thousands</span>
           }
         >
           Revenue trend

@@ -75,7 +75,7 @@ export default function CalendarManagementPage({
         <div className="mt-1 space-y-1">
           {block && <div className="truncate rounded bg-[#f4e3e9] px-1 py-1 text-[8px] font-bold text-[#9a536f] sm:text-[9px]">Blocked</div>}
           {items.slice(0, block ? 1 : 2).map((event) => (
-            <div key={event.id} className={`truncate rounded px-1 py-1 text-[8px] font-semibold sm:text-[9px] ${event.status === 'Confirmed' ? 'bg-[#f7e6ef] text-[#9e537b]' : 'bg-[#fdf1d2] text-[#8d7130]'}`}>{event.source === 'demo' ? 'Demo · ' : ''}{event.name}</div>
+            <div key={event.id} className={`truncate rounded px-1 py-1 text-[8px] font-semibold sm:text-[9px] ${event.status === 'Confirmed' ? 'bg-[#f7e6ef] text-[#9e537b]' : 'bg-[#fdf1d2] text-[#8d7130]'}`}>{event.source === 'demo' ? 'Demo sample · ' : ''}{event.name}</div>
           ))}
           {items.length > (block ? 1 : 2) && <p className="text-[8px] text-[#827588]">+{items.length - (block ? 1 : 2)} more</p>}
         </div>
@@ -100,7 +100,7 @@ export default function CalendarManagementPage({
           <p className="mt-2 max-w-2xl text-[13px] leading-relaxed text-[#827889]">See reserved events and block dates when your studio is unavailable.</p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <button type="button" disabled={!allowLocalEventCreation} title={!allowLocalEventCreation ? 'Supabase event creation will be available in Phase 3B.' : undefined} onClick={() => openForSelectedDate('event')} className="inline-flex min-h-9 items-center gap-2 rounded-xl bg-[#bd7294] px-3.5 py-2 text-[12px] font-bold text-white shadow-sm hover:bg-[#a95f81] disabled:cursor-not-allowed disabled:opacity-50" data-testid="button-calendar-create-event"><Plus size={14}/> Create event</button>
+          <button type="button" disabled={!allowLocalEventCreation} title={!allowLocalEventCreation ? 'Event creation is unavailable from this calendar.' : undefined} onClick={() => openForSelectedDate('event')} className="inline-flex min-h-9 items-center gap-2 rounded-xl bg-[#bd7294] px-3.5 py-2 text-[12px] font-bold text-white shadow-sm hover:bg-[#a95f81] disabled:cursor-not-allowed disabled:opacity-50" data-testid="button-calendar-create-event"><Plus size={14}/> Create event</button>
           {!selectedBlock && selectedEvents.length === 0 && <button type="button" onClick={() => openForSelectedDate('block')} className="inline-flex min-h-9 items-center gap-2 rounded-xl border border-[#e7dce9] bg-white px-3.5 py-2 text-[12px] font-bold text-[#66566e] hover:bg-[#faf6fb]" data-testid="button-calendar-block-date"><ShieldBan size={14}/> Block date</button>}
           <div className="flex rounded-xl border border-[#eee7ef] bg-white p-1">
             {(['Month', 'Week', 'Day'] as const).map((mode) => (
@@ -160,7 +160,7 @@ export default function CalendarManagementPage({
                   <span className="text-[9px] font-bold uppercase text-[#9b8fa0]">{labelDate(date, { weekday: 'short' })}</span>
                   <span className="ml-2 text-[12px] font-bold">{labelDate(date, { day: 'numeric', month: 'short' })}</span>
                   {dayBlock(date) && <div className="mt-2 rounded-md bg-[#f4e3e9] px-2 py-1 text-[9px] font-semibold text-[#9a536f]">Blocked · {dayBlock(date)?.reason}</div>}
-                  {dayEvents(date).map((event) => <div key={event.id} className={`mt-2 rounded-md px-2 py-1 text-[9px] ${event.status === 'Confirmed' ? 'bg-[#f7e6ef] text-[#9e537b]' : 'bg-[#fdf1d2] text-[#8d7130]'}`}>{event.time} · {event.source === 'demo' ? 'Demo · ' : ''}{event.name}</div>)}
+                  {dayEvents(date).map((event) => <div key={event.id} className={`mt-2 rounded-md px-2 py-1 text-[9px] ${event.status === 'Confirmed' ? 'bg-[#f7e6ef] text-[#9e537b]' : 'bg-[#fdf1d2] text-[#8d7130]'}`}>{event.time} · {event.source === 'demo' ? 'Demo sample · ' : ''}{event.name}</div>)}
                 </button>
               ))}
             </div>
@@ -204,7 +204,7 @@ export default function CalendarManagementPage({
           ))}
           {selectedEvents.length > 0 && !selectedBlock && <p className="mb-3 text-[10px] text-[#918695]">This date has an event, so a full-day block cannot be added.</p>}
           <div className="mt-4 flex flex-wrap gap-2 border-t border-[#f0ebf1] pt-4">
-            <button type="button" disabled={!allowLocalEventCreation} title={!allowLocalEventCreation ? 'Supabase event creation will be available in Phase 3B.' : undefined} onClick={() => openForSelectedDate('event')} className="inline-flex items-center gap-1.5 rounded-lg bg-[#bd7294] px-3 py-2 text-[10px] font-bold text-white hover:bg-[#a95f81] disabled:cursor-not-allowed disabled:opacity-50" data-testid="button-date-create-event"><Plus size={13}/> Create event</button>
+            <button type="button" disabled={!allowLocalEventCreation} title={!allowLocalEventCreation ? 'Event creation is unavailable from this calendar.' : undefined} onClick={() => openForSelectedDate('event')} className="inline-flex items-center gap-1.5 rounded-lg bg-[#bd7294] px-3 py-2 text-[10px] font-bold text-white hover:bg-[#a95f81] disabled:cursor-not-allowed disabled:opacity-50" data-testid="button-date-create-event"><Plus size={13}/> Create event</button>
             {!selectedBlock && selectedEvents.length === 0 && <button type="button" onClick={() => openForSelectedDate('block')} className="inline-flex items-center gap-1.5 rounded-lg border border-[#e7dce9] bg-white px-3 py-2 text-[10px] font-bold text-[#66566e] hover:bg-[#faf6fb]" data-testid="button-date-block"><ShieldBan size={13}/> Block date</button>}
           </div>
           <div className="mt-5 border-t border-[#f0ebf1] pt-4">
@@ -215,7 +215,7 @@ export default function CalendarManagementPage({
               .slice(0, 5)
               .map((item) => (
                 <button key={item.id} type="button" onClick={() => setCalendarDate(item.date)} className="flex w-full items-center justify-between border-b border-[#f5f0f5] py-2 text-left" data-testid={`button-upcoming-date-${item.id}`}>
-                  <span className="truncate pr-2 text-[10px] font-semibold">{labelDate(item.date, { day: 'numeric', month: 'short' })} · {item.source === 'demo' ? 'Demo · ' : ''}{item.label}</span><ChevronRight size={13} className="shrink-0 text-[#a99eae]"/>
+                  <span className="truncate pr-2 text-[10px] font-semibold">{labelDate(item.date, { day: 'numeric', month: 'short' })} · {item.source === 'demo' ? 'Demo sample · ' : ''}{item.label}</span><ChevronRight size={13} className="shrink-0 text-[#a99eae]"/>
                 </button>
               ))}
           </div>

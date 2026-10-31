@@ -5,6 +5,7 @@ import * as React from "react";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import CalendarManagementPage from "../src/business/calendar-management";
+import EventDataStatus from "../src/business/EventDataStatus";
 import {
   mapSupabaseEvents,
   readBusinessEvents,
@@ -144,6 +145,26 @@ test("Availability renders a confirmed live Event on its saved calendar date", (
   assert.doesNotMatch(markup, /live Events loaded from Supabase/);
 });
 
+test("Event status keeps useful loading and error feedback but hides routine success banners", () => {
+  const loading = renderToStaticMarkup(createElement(EventDataStatus, {
+    state: "loading",
+    error: "",
+  }));
+  const error = renderToStaticMarkup(createElement(EventDataStatus, {
+    state: "error",
+    error: "permission denied",
+  }));
+  const loaded = renderToStaticMarkup(createElement(EventDataStatus, {
+    state: "loaded",
+    error: "",
+  }));
+
+  assert.match(loading, /Loading events/);
+  assert.match(error, /permission denied/);
+  assert.match(error, /Refresh the page to try again/);
+  assert.equal(loaded, "");
+});
+
 test("the portal reads Events through SELECT queries and keeps them out of local demo storage", () => {
   const portal = readFileSync(new URL("../src/business/BusinessPortal.tsx", import.meta.url), "utf8");
   const calendar = readFileSync(new URL("../src/business/calendar-management.tsx", import.meta.url), "utf8");
@@ -162,10 +183,16 @@ test("the portal reads Events through SELECT queries and keeps them out of local
   assert.match(portal, /\["All", "Confirmed", "Upcoming"/);
   assert.match(calendar, /event\.status === 'Confirmed'/);
   assert.match(portal, /disabled=\{e\.source === "supabase"\}/);
-  assert.match(portal, /disabled\s+title="Supabase event creation will be available in Phase 3B\."/);
+  assert.match(portal, /disabled\s+title="Event creation is unavailable from this page\."/);
   assert.match(calendar, /disabled=\{!allowLocalEventCreation\}/);
   assert.doesNotMatch(calendar, /Live Events are read-only in Phase 3A/);
   assert.doesNotMatch(calendar, /EventDataStatus/);
+  assert.doesNotMatch(portal, /Phase 3A|Phase 3B|Accept Proposal \(Customer Demo\)|saved to Supabase|later update/);
+  assert.match(calendar, /Demo sample/);
+  assert.match(portal, /Sample supplier data; these listings are not verified partners/);
+  assert.match(portal, /Illustrative Data/);
+  assert.match(portal, /Refreshing requests…/);
+  assert.match(portal, /Refreshing proposals…/);
   assert.match(portal, /\["All", "Confirmed", "Upcoming"/);
   assert.match(portal, /state=\{eventFetchState\}/);
   assert.match(portal, /localStorage\.setItem\(DB_KEY, JSON\.stringify\(store\)\)/);
