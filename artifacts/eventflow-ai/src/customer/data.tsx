@@ -1,7 +1,17 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useUnifiedAuth } from "@/auth/UnifiedAuth";
 import { supabase } from "@/lib/supabase";
+import { SUBMISSION_MVP } from "@/lib/submissionMvp";
 import { savePlanSelection, workflowErrorMessage, type PlanSelection } from "./workflow";
+import { asSelection, workflowRpc, type WorkflowRevision } from "@/lib/businessWorkflow";
+import { CustomerProposalApiError, type GenerationNotice } from "./proposalDisplay";
+import {
+  CUSTOMER_RESPONSE_WORKFLOW_ENABLED,
+  parseCustomerResponseRows,
+  submitCustomerResponse as submitSavedCustomerResponse,
+  type CustomerResponseRecord,
+  type SubmitCustomerResponseInput,
+} from "./customerResponses";
 
 export type ProposalState = "AI Draft" | "Pending Business Approval" | "Approved for Customer" | "Changes Requested" | "Customer Accepted";
 // Event status tracks the proposal workflow. These labels are shown to customers.
@@ -37,6 +47,8 @@ export type CustomerEvent = {
   status: EventStatus; createdAt: string; proposal?: EventProposal; acceptedPlanId?: "A" | "B"; preferredPlanId?: "A" | "B"; requestSource?: "demo" | "supabase";
   proposalLookup?: { state: "ready" | "empty" | "error"; rowCount: number; message?: string };
   selection?: PlanSelection;
+  workflow?: WorkflowRevision;
+  customerResponse?: CustomerResponseRecord;
 };
 export type ChangeRequest = { id: string; eventId: string; message: string; createdAt: string };
 export type ProposalGenerationInput = Pick<CustomerEvent, "name" | "type" | "date" | "location" | "guests" | "budget" | "theme" | "services" | "requirements">;
@@ -44,7 +56,7 @@ export type ProposalGenerationInput = Pick<CustomerEvent, "name" | "type" | "dat
 // No external AI service is connected by this interface yet.
 export interface ProposalService {
   generate(input: ProposalGenerationInput, idempotencyKey?: string): Promise<EventProposal>;
-  generatePersisted?(requestId: string): Promise<EventProposal>;
+  generatePersisted?(requestId: string, onReceipt?: (state: GenerationNotice) => void): Promise<EventProposal | undefined>;
 }
 export const mockProposalService: ProposalService = {
   async generate() { throw new Error("Proposal generation is currently represented by labeled mock data."); },
@@ -200,10 +212,10 @@ function mapSavedRequest(row: SupabaseCustomerRequestRow, proposalRows: Supabase
     );
     const statuses = pair.map((item) => item.status);
     if (statuses.every((item) => item === "Changes Requested")) status = "Changes Requested";
-    else if (statuses.every((item) => item === "Customer Accepted")) status = "Customer Accepted";
-    else if (statuses.every((item) => item === "Approved for Customer")) status = "Approved for Customer";
-    // Legacy "Awaiting Customer" pairs are deliberately still awaiting the
-    // customer's Option B selection; they are not treated as approved here.
+    else if (statuses.every((item) => ["Awaiting Customer", "Accepted", "Declined", "Approved for Customer"].includes(item ?? ""))) {
+      status = statuses.some((item) => item === "Accepted") ? "Customer Accepted" : "Approved for Customer";
+    }
+    // Submission mode uses the existing database approval statuses, not a ledger.
     else status = "Pending Business Approval";
     proposal = {
       plans,
@@ -240,6 +252,7 @@ function persistedErrorMessage(code: unknown, message: unknown): string {
   if (code === "PERSISTENCE_NOT_CONFIGURED") return "Proposal saving is not enabled on the server yet. Your request is saved; please try again after the planning team configures it.";
   if (code === "REQUEST_NOT_FOUND" || code === "REQUEST_OWNERSHIP_MISMATCH") return "We couldn’t verify this saved request. Refresh your events and try again.";
   if (code === "CUSTOMER_ACCESS_DENIED") return "This account no longer has customer access. Please sign in with an approved customer account.";
+  if (code === "PROPOSAL_EXCEEDS_BUDGET") return "Proposal generation could not be completed. Your request is saved, and no automatic retry will be made. Please contact the planning team.";
   return typeof message === "string" && message.trim()
     ? message
     : "We couldn’t generate and save your proposals. Please try again.";
@@ -264,7 +277,7 @@ export const apiProposalService: ProposalService = {
     const plans = mapGeneratedPlans(result.proposal.recommendation, result.proposal.plans);
     return { plans, updatedAt: new Date().toISOString(), source: "ai-service" };
   },
-  async generatePersisted(requestId: string): Promise<EventProposal> {
+  async generatePersisted(requestId: string, onReceipt?: (state: GenerationNotice) => void): Promise<EventProposal | undefined> {
     const { data, error } = await supabase.auth.getSession();
     const accessToken = data.session?.access_token;
     if (error || !accessToken) {
@@ -290,44 +303,22 @@ export const apiProposalService: ProposalService = {
     if (!response.ok) {
       const body = isRecord(result) ? result : {};
       console.error("EventFlow proposal API error:", response.status, body.code, body.error);
-      throw new Error(persistedErrorMessage(body.code, body.error));
+      throw new CustomerProposalApiError(persistedErrorMessage(body.code, body.error), typeof body.code === "string" ? body.code : undefined);
     }
 
-    if (!isRecord(result) || result.requestId !== requestId || !Array.isArray(result.proposals) || result.proposals.length !== 2) {
-      throw new Error("The server returned an incomplete saved proposal pair. Please retry safely.");
-    }
-    const rows = result.proposals as unknown[];
-    const planRows = rows.map((value) => {
-      if (!isRecord(value) || (value.plan_key !== "A" && value.plan_key !== "B") || typeof value.proposal_id !== "string"
-        || typeof value.status !== "string" || typeof value.recommendation !== "string" || !isRecord(value.plan_content)) {
-        throw new Error("The saved proposals could not be read safely. Please contact the planning team.");
-      }
-      const content = mapPersistedPlan(value.plan_content, value.plan_key);
-      return { planKey: value.plan_key, proposalId: value.proposal_id, status: value.status, recommendation: value.recommendation, content };
-    });
-    if (new Set(planRows.map((row) => row.planKey)).size !== 2) {
-      throw new Error("The server did not return one saved Plan A and one saved Plan B.");
-    }
-    const recommendation = planRows.find((row) => row.planKey === "A")!.recommendation;
-    const plans = mapGeneratedPlans(recommendation, planRows.map((row) => row.content) as GeneratedProposalResponse["plans"]);
-    return {
-      plans,
-      updatedAt: new Date().toISOString(),
-      source: "persisted-ai",
-      // Legacy pairs marked Awaiting Customer still need the customer's
-      // Option B selection; loading or retrying must not imply approval.
-      workflowStatus: "Pending Business Approval",
-      revision: String(result.revision),
-      proposalIds: {
-        A: planRows.find((row) => row.planKey === "A")?.proposalId,
-        B: planRows.find((row) => row.planKey === "B")?.proposalId,
-      },
-    };
+    if (!isRecord(result) || result.requestId !== requestId || !Number.isInteger(result.revision)
+      || !["created", "existing"].includes(String(result.persistence))
+      || !["business_review", "released", "selected", "confirmed", "changes_requested"].includes(String(result.workflowState))
+      || "proposals" in result) throw new Error("The private generation receipt could not be verified.");
+    // Read released plans via Supabase/RLS, never from a generation response.
+    onReceipt?.(result.workflowState === "business_review" ? "business_review" : result.workflowState === "released" ? "released" : "unknown");
+    return undefined;
   },
 };
 type CustomerState = {
   user: { id: string; name: string; email: string } | null; authLoading: boolean; events: CustomerEvent[]; changeRequests: ChangeRequest[];
-  remoteLoading: boolean; remoteError: string;
+  remoteLoading: boolean; remoteError: string; customerResponseError: string;
+  generationNotices: Record<string, GenerationNotice>;
   workflowError: string;
   reloadSavedEvents: () => void;
   signIn: (email: string, password: string, registering?: boolean, fullName?: string) => Promise<{ error?: string; message?: string; signedIn: boolean }>;
@@ -337,7 +328,8 @@ type CustomerState = {
   generateProposal: (id: string, input: ProposalGenerationInput, requestSource?: "demo" | "supabase") => Promise<void>;
   acceptProposal: (id: string, planId: "A" | "B") => void;
   preferProposal: (id: string, planId: "A" | "B") => Promise<{ error?: string; stored?: boolean }>;
-  requestChanges: (id: string, message: string) => void;
+  submitCustomerResponse: (id: string, input: Omit<SubmitCustomerResponseInput, "requestId" | "revision">) => Promise<CustomerResponseRecord>;
+  requestChanges: (id: string, message: string) => Promise<void>;
 };
 type PersistedState = Pick<CustomerState, "events" | "changeRequests">;
 const STORAGE_KEY = "eventflow-customer-v1";
@@ -392,29 +384,57 @@ export function CustomerProvider({ children }: { children: ReactNode }) {
     if (!auth.session || auth.destination !== "/customer") return null;
     return { id: auth.session.user.id, email: auth.session.user.email ?? "", name: auth.profile?.full_name?.trim() || auth.session.user.email?.split("@")[0] || "Customer" };
   }, [auth.session?.user.id, auth.session?.user.email, auth.profile?.full_name, auth.destination]);
-  const [remoteLoading, setRemoteLoading] = useState(false);
+  const [remoteLoading, setRemoteLoading] = useState(Boolean(user));
   const [remoteError, setRemoteError] = useState("");
+  const [customerResponseError, setCustomerResponseError] = useState("");
   const [reloadVersion, setReloadVersion] = useState(0);
+  const [generationNotices, setGenerationNotices] = useState<Record<string, GenerationNotice>>({});
+  const remoteOwner = useRef<string | null>(user?.id ?? null);
+  const customerResponseSnapshots = useRef<{ userId: string | null; rows: Map<string, CustomerResponseRecord> }>({
+    userId: user?.id ?? null,
+    rows: new Map(),
+  });
+  const refreshRemote = useRef<() => void>(() => {});
   const [selections, setSelections] = useState<PlanSelection[]>([]);
+  const [workflowRevisions, setWorkflowRevisions] = useState<WorkflowRevision[]>([]);
+  const workflowSignature = useRef("");
   const [workflowError, setWorkflowError] = useState("");
   const workflowEpoch = useRef(0);
   useEffect(() => {
     let active = true;
     let busy = false;
     setSelections([]);
+    setWorkflowRevisions([]);
     setWorkflowError("");
     if (!user) return;
+    if (SUBMISSION_MVP) {
+      try {
+        const saved = JSON.parse(localStorage.getItem(`eventflow-submission-preferences:${user.id}`) || "[]");
+        if (Array.isArray(saved)) setSelections(saved.filter(item => item?.customer_id === user.id));
+      } catch { /* Preferences are optional demo-only browser data. */ }
+      const refresh = () => setReloadVersion(value => value + 1);
+      const timer = window.setInterval(refresh, 10_000);
+      window.addEventListener("focus", refresh);
+      return () => { window.clearInterval(timer); window.removeEventListener("focus", refresh); };
+    }
     const refresh = async () => {
       if (busy) return;
       busy = true;
       const epoch = workflowEpoch.current;
       try {
-        const { data, error } = await supabase.from("eventflow_plan_selections")
-          .select("request_id, customer_id, proposal_id, plan_key, revision, decision, message, selected_at, reviewed_at")
+        const { data, error } = await supabase.from("eventflow_proposal_revisions")
+          .select("*")
           .eq("customer_id", user.id);
         if (!active || epoch !== workflowEpoch.current) return;
         if (error) { setWorkflowError(workflowErrorMessage(error)); return; }
-        setSelections((data ?? []) as PlanSelection[]);
+        const rows = (data ?? []) as WorkflowRevision[];
+        setWorkflowRevisions(rows);
+        setSelections(rows.flatMap(row => { const selection = asSelection(row); return selection ? [selection] : []; }));
+        const signature = JSON.stringify(rows);
+        if (workflowSignature.current !== signature) {
+          workflowSignature.current = signature;
+          setReloadVersion(version => version + 1);
+        }
         setWorkflowError("");
       } catch {
         if (active) setWorkflowError("Business decisions could not be refreshed. Check your connection.");
@@ -424,45 +444,69 @@ export function CustomerProvider({ children }: { children: ReactNode }) {
     const timer = window.setInterval(() => void refresh(), 10_000);
     window.addEventListener("focus", refresh);
     return () => { active = false; window.clearInterval(timer); window.removeEventListener("focus", refresh); };
-  }, [user?.id, reloadVersion]);
+  }, [user?.id]);
   useEffect(() => {
     try {
       const demoState = { ...state, events: state.events.filter((event) => event.requestSource !== "supabase") };
       localStorage.setItem(STORAGE_KEY, JSON.stringify(demoState));
     } catch { /* The portal remains usable without storage. */ }
   }, [state]);
-useEffect(() => {
+  useEffect(() => {
     let active = true;
+    let busy = false;
+    let hasLoaded = false;
+    const controller = new AbortController();
+    const responseOwner = user?.id ?? null;
+    if (customerResponseSnapshots.current.userId !== responseOwner) {
+      customerResponseSnapshots.current = { userId: responseOwner, rows: new Map() };
+    }
+    remoteOwner.current = user?.id ?? null;
+    setGenerationNotices({});
     setRemoteError("");
-    setState((current) => ({ ...current, events: current.events.filter((event) => event.requestSource !== "supabase") }));
+    setCustomerResponseError("");
+    // Clear private data only at the account boundary, never on a background tick.
+    setState((current) => ({
+      ...current, events: current.events.filter((event) => event.requestSource !== "supabase"),
+      changeRequests: current.changeRequests.filter((change) => current.events.some((event) => event.id === change.eventId && event.requestSource !== "supabase")),
+    }));
     if (!user) {
+      refreshRemote.current = () => {};
       setRemoteLoading(false);
       return () => { active = false; };
     }
 
     setRemoteLoading(true);
-    void (async () => {
+    const refresh = async () => {
+      if (!active || busy) return;
+      busy = true;
       try {
         const { data: authData, error: authError } = await supabase.auth.getUser();
-        if (authError || authData.user?.id !== user.id) throw new Error("Your secure session changed. Please sign in again.");
+        if (authError || authData.user?.id !== user.id) {
+          // Network failures can retain the snapshot; an explicit invalid identity cannot.
+          if (active && (!authError || authError.status === 401 || authError.status === 403)) {
+            setState((current) => ({ ...current, events: current.events.filter((event) => event.requestSource !== "supabase"), changeRequests: [] }));
+          }
+          throw new Error("Your secure session changed. Please sign in again.");
+        }
         const { data: requestData, error: requestError } = await supabase
           .from("requests")
           .select("id, customer_id, customer_name, email, phone, event_name, event_type, event_date, event_time, guests, budget, services, notes, status, created_at")
           .eq("customer_id", user.id)
-          .order("created_at", { ascending: false, nullsFirst: false });
+          .order("created_at", { ascending: false, nullsFirst: false })
+          .abortSignal(controller.signal);
         if (requestError) throw new Error(`Saved requests could not be loaded: ${requestError.message}`);
         if (!active) return;
 
         const requestRows = (requestData ?? []) as unknown as SupabaseCustomerRequestRow[];
         const requestIds = requestRows.filter((row) => row.customer_id === user.id).map((row) => row.id);
         let proposalsByRequest = new Map<string, SupabaseCustomerProposalRow[]>();
-        let proposalError = "";
         if (requestIds.length) {
           const { data: proposalData, error } = await supabase
             .from("proposals")
             .select("id, request_id, status, recommendation, revision, plan_key, plan_content")
-            .in("request_id", requestIds);
-          if (error) proposalError = `Saved plans could not be loaded: ${error.message}`;
+            .in("request_id", requestIds)
+            .abortSignal(controller.signal);
+          if (error) throw new Error(`Saved plans could not be loaded: ${error.message}`);
           else {
             for (const row of (proposalData ?? []) as unknown as SupabaseCustomerProposalRow[]) {
               if (!requestIds.includes(row.request_id)) continue;
@@ -474,6 +518,37 @@ useEffect(() => {
         }
         if (!active) return;
 
+        const responsesByRevision = new Map<string, CustomerResponseRecord>();
+        let responseError = "";
+        if (CUSTOMER_RESPONSE_WORKFLOW_ENABLED && requestIds.length) {
+          const { data: responseData, error } = await supabase
+            .from("eventflow_customer_responses")
+            .select("*")
+            .in("request_id", requestIds)
+            .order("responded_at", { ascending: false })
+            .abortSignal(controller.signal);
+          if (error) {
+            responseError = "Saved customer responses could not be loaded. Previously displayed responses may be out of date.";
+          } else {
+            try {
+              for (const response of parseCustomerResponseRows(responseData ?? [])) {
+                if (response.customer_id !== user.id || !requestIds.includes(response.request_id)) continue;
+                const key = `${response.request_id}:${response.revision}`;
+                if (!responsesByRevision.has(key)) responsesByRevision.set(key, response);
+              }
+            } catch (error) {
+              responseError = error instanceof Error
+                ? error.message
+                : "Saved customer responses could not be verified.";
+            }
+          }
+          if (!responseError) {
+            customerResponseSnapshots.current = { userId: user.id, rows: responsesByRevision };
+          }
+        }
+        if (!active) return;
+        setCustomerResponseError(responseError);
+
         let invalidPair = false;
         const hydrated = requestRows
           .filter((row) => row.customer_id === user.id)
@@ -481,7 +556,6 @@ useEffect(() => {
             const rows = proposalsByRequest.get(row.id) ?? [];
             let event: CustomerEvent;
             try {
-              if (proposalError) throw new Error(proposalError);
               event = mapSavedRequest(row, rows, user.id);
             } catch (error) {
               invalidPair = true;
@@ -498,33 +572,56 @@ useEffect(() => {
               outcome: event.proposalLookup?.state,
               error: event.proposalLookup?.message,
             });
-            return event;
+            const response = event.proposal
+              ? responsesByRevision.get(`${event.id}:${event.proposal.revision}`)
+                ?? (responseError && customerResponseSnapshots.current.userId === user.id
+                  ? customerResponseSnapshots.current.rows.get(`${event.id}:${event.proposal.revision}`)
+                  : undefined)
+              : undefined;
+            return response ? { ...event, customerResponse: response } : event;
           });
         setState((current) => ({
           ...current,
           events: [...hydrated, ...current.events.filter((event) => event.requestSource !== "supabase")],
         }));
-        setRemoteError(proposalError || (invalidPair ? "One saved Plan A/Plan B pair is incomplete and was not displayed." : ""));
+        hasLoaded = true;
+        setRemoteError(invalidPair ? "One saved Plan A/Plan B pair is incomplete and was not displayed." : "");
       } catch (error) {
-        if (active) setRemoteError(error instanceof Error ? error.message : "Saved EventFlow data could not be loaded.");
+        if (active) setRemoteError(`${error instanceof Error ? error.message : "Saved EventFlow data could not be loaded."}${hasLoaded ? " Previously displayed data may be out of date." : ""}`);
       } finally {
+        busy = false;
         if (active) setRemoteLoading(false);
       }
-    })();
+    };
+    refreshRemote.current = () => { void refresh(); };
+    void refresh();
 
-    return () => { active = false; };
-  }, [user?.id, reloadVersion]);
+    return () => { active = false; controller.abort(); };
+  }, [user?.id]);
+  useEffect(() => { refreshRemote.current(); }, [reloadVersion]);
+  const sameAccount = remoteOwner.current === (user?.id ?? null);
   const value = useMemo<CustomerState>(() => ({ ...state,
-    events: state.events.map((event) => {
+    changeRequests: sameAccount ? state.changeRequests : [],
+    events: state.events.filter((event) => sameAccount || event.requestSource !== "supabase").map((event) => {
       if (event.requestSource !== "supabase") return event;
       const selection = selections.find((item) => item.request_id === event.id && item.customer_id === user?.id
         && item.revision === event.proposal?.revision
         && event.proposal?.proposalIds?.[item.plan_key] === item.proposal_id);
-      return { ...event, selection, preferredPlanId: selection?.plan_key,
-        status: selection?.decision === "approved" ? "Approved for Customer"
-          : selection?.decision === "changes_requested" ? "Changes Requested" : event.status };
+      const workflow = workflowRevisions.filter(row => row.request_id === event.id).sort((a,b) => b.revision-a.revision)[0];
+      const currentPlans = SUBMISSION_MVP
+        ? Boolean(event.proposal && ["Approved for Customer", "Customer Accepted"].includes(event.status))
+        : Boolean(workflow?.released_at && String(workflow.revision) === event.proposal?.revision);
+      return { ...event, workflow, proposal: currentPlans ? event.proposal : undefined,
+        selection: currentPlans ? selection : undefined, preferredPlanId: currentPlans ? selection?.plan_key : undefined,
+        status: workflow?.state === "confirmed" ? "Customer Accepted"
+          : workflow?.state === "released" ? "Approved for Customer"
+          : workflow ? "Pending Business Approval" : event.status };
     }),
-    user, authLoading, remoteLoading, remoteError, workflowError,
+    user, authLoading, remoteLoading: !sameAccount && Boolean(user) ? true : remoteLoading,
+    remoteError: sameAccount ? remoteError : "",
+    customerResponseError: sameAccount ? customerResponseError : "",
+    workflowError,
+    generationNotices: sameAccount ? generationNotices : {},
     reloadSavedEvents: () => setReloadVersion((version) => version + 1),
     signIn: async (...args) => { const result = await auth.signIn(...args); return { ...result, signedIn: result.signedIn ?? false }; },
     signOut: auth.signOut,
@@ -563,7 +660,10 @@ useEffect(() => {
       }
       return data.id;
     },
-    addEvent: (event, id, requestSource) => { setState((current) => ({ ...current, events: [{ ...event, id, requestSource, createdAt: new Date().toISOString(), status: "AI Draft" }, ...current.events] })); },
+    addEvent: (event, id, requestSource) => {
+      if (requestSource === "supabase") setGenerationNotices(current => ({ ...current, [id]: "not_generated" }));
+      setState((current) => ({ ...current, events: [{ ...event, id, requestSource, createdAt: new Date().toISOString(), status: "AI Draft" }, ...current.events] }));
+    },
     generateProposal: async (id, input, requestSource) => {
      const existing = state.events.find((item) => item.id === id);
 
@@ -572,13 +672,21 @@ const isSupabaseRequest =
   existing?.requestSource === "supabase";
 
 if (existing?.proposal) {
-  if (existing.proposal.source === "persisted-ai") return;
+  const latest = workflowRevisions.filter(row => row.request_id === id).sort((a,b)=>b.revision-a.revision)[0];
+  if (existing.proposal.source === "persisted-ai" && !latest) return;
+  if (existing.proposal.source === "persisted-ai" && latest && !["queued","generating"].includes(latest.state)) return;
   if (!isSupabaseRequest) return;
 }
-      let proposal: EventProposal;
+      let proposal: EventProposal | undefined;
       if (isSupabaseRequest) {
         if (!apiProposalService.generatePersisted) throw new Error("Saved proposal generation is not available in this portal version.");
-        proposal = await apiProposalService.generatePersisted(id);
+        setGenerationNotices(current => ({ ...current, [id]: "generating" }));
+        try {
+          proposal = await apiProposalService.generatePersisted(id, (notice) => setGenerationNotices(current => ({ ...current, [id]: notice })));
+        } catch (error) {
+          setGenerationNotices(current => ({ ...current, [id]: error instanceof CustomerProposalApiError && error.code === "DEMO_BUDGET_EXHAUSTED" ? "quota_exhausted" : "failed" }));
+          throw error;
+        }
       } else {
         proposal = await apiProposalService.generate(input, id);
       }
@@ -592,7 +700,7 @@ if (existing?.proposal) {
           ...item,
           proposal,
           status:
-            proposal.workflowStatus ??
+            proposal?.workflowStatus ??
             (isSupabaseRequest ? "Pending Business Approval" : "AI Draft"),
         }
       : item
@@ -608,6 +716,18 @@ if (existing?.proposal) {
        const proposalId = event.proposal.proposalIds?.[planId];
        if (!proposalId) return { error: "The saved proposal ID is missing. Reload this event." };
        try {
+          if (SUBMISSION_MVP) {
+            if (!["Approved for Customer"].includes(event.status)) return { error: "Only Business-approved proposals can be chosen." };
+            const selection: PlanSelection = {
+              request_id: id, customer_id: user.id, proposal_id: proposalId, plan_key: planId,
+              revision: event.proposal.revision || "", decision: "pending",
+              message: "Demo-only browser preference; not a booking.", selected_at: new Date().toISOString(), reviewed_at: null,
+            };
+            const next = [selection, ...selections.filter(item => item.request_id !== id)];
+            localStorage.setItem(`eventflow-submission-preferences:${user.id}`, JSON.stringify(next));
+            setSelections(next);
+            return { stored: true };
+          }
          ++workflowEpoch.current;
          const selection = await savePlanSelection(id, proposalId);
          ++workflowEpoch.current;
@@ -618,14 +738,75 @@ if (existing?.proposal) {
          return { error: error instanceof Error ? error.message : "Your selection could not be saved." };
        }
     },
+    submitCustomerResponse: async (id, input) => {
+      if (!CUSTOMER_RESPONSE_WORKFLOW_ENABLED) {
+        throw new Error("Customer responses are unavailable until the database workflow is approved.");
+      }
+      if (!user) throw new Error("Sign in with an approved Customer account before responding.");
+      const event = state.events.find((item) => item.id === id);
+      if (!event || event.requestSource !== "supabase" || event.proposal?.source !== "persisted-ai"
+        || event.status !== "Approved for Customer" || !event.proposal.revision
+        || !event.proposal.proposalIds?.A || !event.proposal.proposalIds?.B) {
+        throw new Error("Both Business-approved plans must be available before responding.");
+      }
+      if (event.customerResponse) {
+        throw new Error("A response is already saved for this proposal revision.");
+      }
+      if (input.kind === "selection") {
+        const selectedId = input.selectedProposalId;
+        if (!selectedId || ![event.proposal.proposalIds.A, event.proposal.proposalIds.B].includes(selectedId)) {
+          throw new Error("Select Plan A or Plan B from this approved pair.");
+        }
+      } else if (!input.feedback?.trim()) {
+        throw new Error("Enter feedback before submitting a Change Request.");
+      }
+      const { data: authData, error: authError } = await supabase.auth.getUser();
+      if (authError || authData.user?.id !== user.id) {
+        throw new Error("Your secure session changed. Sign in again before submitting.");
+      }
+      const response = await submitSavedCustomerResponse({
+        ...input,
+        requestId: id,
+        revision: event.proposal.revision,
+      }, user.id);
+      setState((current) => ({
+        ...current,
+        events: current.events.map((item) =>
+          item.id === id && item.proposal?.revision === response.revision
+            ? { ...item, customerResponse: response }
+            : item),
+      }));
+      setCustomerResponseError("");
+      setReloadVersion((version) => version + 1);
+      return response;
+    },
     acceptProposal: (id, planId) => setState((current) => ({ ...current, events: current.events.map((event) => event.id === id && event.status === "Approved for Customer" && event.proposal?.plans.some((plan) => plan.id === planId) ? { ...event, status: "Customer Accepted", acceptedPlanId: planId } : event) })),
-    requestChanges: (id, message) => setState((current) => {
-      const event = current.events.find((item) => item.id === id); const trimmed = message.trim();
-      if (!event || event.status === "Customer Accepted" || !trimmed) return current;
+    requestChanges: async (id, message) => {
+      const event = state.events.find(item => item.id === id); const trimmed = message.trim();
+      if (!event || !trimmed) throw new Error("A current event and change message are required.");
+      if (SUBMISSION_MVP && event.requestSource === "supabase") throw new Error("Saved-request revisions are deferred for the submission MVP. No AI call was made.");
+      if (event.requestSource === "supabase") {
+        const latest = workflowRevisions.filter(row => row.request_id === id).sort((a,b) => b.revision-a.revision)[0];
+        if (!latest) throw new Error("Refresh the released proposal before requesting changes.");
+        const next = await workflowRpc("eventflow_request_changes", {
+          p_request_id: id, p_revision: latest.revision, p_message: trimmed,
+        });
+        setWorkflowRevisions(current => [next, ...current.filter(row => row.request_id !== id || row.revision !== next.revision)]);
+        setReloadVersion(version => version+1);
+        try {
+          if (!apiProposalService.generatePersisted) throw new Error("Generation service unavailable.");
+          await apiProposalService.generatePersisted(id);
+        } catch (error) {
+          throw new Error(`Your change request is saved as revision ${next.revision}. Generation needs retry: ${error instanceof Error ? error.message : "Service unavailable."}`);
+        } finally { setReloadVersion(version => version+1); }
+        return;
+      }
+      setState(current => {
       const update: ChangeRequest = { id: `chg-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`, eventId: id, message: trimmed, createdAt: new Date().toISOString() };
       return { ...current, changeRequests: [update, ...current.changeRequests], events: current.events.map((item) => item.id === id ? { ...item, status: "Changes Requested" } : item) };
-    }),
-  }), [state, user, authLoading, remoteLoading, remoteError, selections, workflowError]);
+      });
+    },
+  }), [state, user, authLoading, remoteLoading, remoteError, selections, workflowRevisions, workflowError, sameAccount, generationNotices]);
   return <CustomerContext.Provider value={value}>{children}</CustomerContext.Provider>;
 }
 export function useCustomer() { const context = useContext(CustomerContext); if (!context) throw new Error("useCustomer must be used inside CustomerProvider"); return context; }

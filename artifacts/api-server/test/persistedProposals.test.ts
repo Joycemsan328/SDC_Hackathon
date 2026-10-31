@@ -32,6 +32,14 @@ const request = {
   status: "New", created_at: null, venue_id: null, event_end_time: null,
 };
 
+test("saved decimal budget maps unchanged as a whole-event budget, regardless of guest count", () => {
+  const saved = { ...request, budget: "8000.25", guests: 80 };
+  const mapped = mapSavedRequestToProposalInput(saved);
+  assert.equal(mapped.budgetMYR, 8_000.25);
+  assert.equal(mapped.guestCount, 80);
+  assert.equal(saved.budget, "8000.25");
+});
+
 async function listen(router: express.Router) {
   const app = express(); app.use(express.json()); app.use(router);
   const server: Server = createServer(app).listen(0, "127.0.0.1"); await once(server, "listening");

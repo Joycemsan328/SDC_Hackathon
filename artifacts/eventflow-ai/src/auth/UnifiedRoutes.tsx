@@ -47,6 +47,6 @@ export default function UnifiedRoutes() {
   // Preserve bookmarked Customer URLs while making the new namespace canonical.
   if (destination === "/customer" && (path === "/dashboard" || path === "/events" || path.startsWith("/events/"))) return <Redirect to={`/customer${path}`} />;
   if (path !== prefix && !path.startsWith(`${prefix}/`)) return <Redirect to={prefix} />;
-  if (destination === "/customer") return <Router base="/customer"><CustomerProvider><CustomerArea /></CustomerProvider></Router>;
+  if (destination === "/customer") return <Router base="/customer"><CustomerProvider key={session.user.id}><CustomerArea /></CustomerProvider></Router>;
   return <Router base="/business"><div className="business-portal"><Suspense fallback={<Loading />}><BusinessPortal /></Suspense></div></Router>;
 }

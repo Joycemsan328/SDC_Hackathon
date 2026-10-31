@@ -16,6 +16,19 @@ type AuthState = {
 };
 const AuthContext = createContext<AuthState | null>(null);
 
+function isVerifiedSessionRevalidation(
+  event: string,
+  next: Session | null,
+  verifiedPortalUserId: string | null,
+): boolean {
+  const isBackgroundRevalidation =
+    event === "TOKEN_REFRESHED" || event === "SIGNED_IN" || event === "USER_UPDATED";
+  return isBackgroundRevalidation
+    && next !== null
+    && verifiedPortalUserId !== null
+    && next.user.id === verifiedPortalUserId;
+}
+
 export function UnifiedAuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
@@ -23,12 +36,18 @@ export function UnifiedAuthProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState("");
   const [version, setVersion] = useState(0);
   const sequence = useRef(0);
+  const verifiedPortalUserId = useRef<string | null>(null);
 
   useEffect(() => {
     let active = true;
     const timers = new Set<ReturnType<typeof setTimeout>>();
     const restore = async (next: Session | null, revision: number) => {
       if (!active || revision !== sequence.current) return;
+      if (!next || next.user.id !== verifiedPortalUserId.current) {
+        verifiedPortalUserId.current = null;
+        setProfile(null);
+        setLoading(true);
+      }
       setSession(next);
       try {
         if (next) {
@@ -37,11 +56,21 @@ export function UnifiedAuthProvider({ children }: { children: ReactNode }) {
             .eq("id", next.user.id).maybeSingle();
           if (!active || revision !== sequence.current) return;
           if (profileError) throw profileError;
-          setProfile(data as Profile | null);
-        } else setProfile(null);
+          const loadedProfile = data as Profile | null;
+          setProfile(loadedProfile);
+          verifiedPortalUserId.current =
+            profileDestination(loadedProfile) !== "/pending" ? next.user.id : null;
+        } else {
+          setProfile(null);
+          verifiedPortalUserId.current = null;
+        }
         setError("");
       } catch {
-        if (active && revision === sequence.current) setError("We couldn’t verify your account profile. Retry to check access; no portal access has been granted.");
+        if (active && revision === sequence.current) {
+          verifiedPortalUserId.current = null;
+          setProfile(null);
+          setError("We couldn’t verify your account profile. Retry to check access; no portal access has been granted.");
+        }
       } finally {
         if (active && revision === sequence.current) setLoading(false);
       }
@@ -52,7 +81,12 @@ export function UnifiedAuthProvider({ children }: { children: ReactNode }) {
       if (event === "INITIAL_SESSION") return;
       receivedEvent = true;
       const revision = ++sequence.current;
-      setLoading(true);
+      if (!isVerifiedSessionRevalidation(event, next, verifiedPortalUserId.current)) {
+        verifiedPortalUserId.current = null;
+        setSession(next);
+        setProfile(null);
+        setLoading(true);
+      }
       // Query only after Supabase releases its auth callback lock.
       const timer = setTimeout(() => { timers.delete(timer); void restore(next, revision); }, 0);
       timers.add(timer);
@@ -61,13 +95,20 @@ export function UnifiedAuthProvider({ children }: { children: ReactNode }) {
     void supabase.auth.getSession().then(({ data, error: sessionError }) => {
       if (!active || receivedEvent) return;
       if (sessionError) {
+        verifiedPortalUserId.current = null;
+        setProfile(null);
         setError("Your session could not be restored. Please sign in again.");
         setLoading(false);
         return;
       }
       void restore(data.session, initialRevision);
     }).catch(() => {
-      if (active && !receivedEvent) { setError("Authentication is unavailable. Please retry."); setLoading(false); }
+      if (active && !receivedEvent) {
+        verifiedPortalUserId.current = null;
+        setProfile(null);
+        setError("Authentication is unavailable. Please retry.");
+        setLoading(false);
+      }
     });
     return () => { active = false; ++sequence.current; timers.forEach(clearTimeout); subscription.unsubscribe(); };
   }, [version]);
@@ -85,6 +126,7 @@ export function UnifiedAuthProvider({ children }: { children: ReactNode }) {
     signOut: async () => {
       const { error: signOutError } = await supabase.auth.signOut();
       if (signOutError) throw signOutError;
+      verifiedPortalUserId.current = null;
       setSession(null);
       setProfile(null);
     },

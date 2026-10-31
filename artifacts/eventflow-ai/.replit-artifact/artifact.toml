@@ -1,27 +1,30 @@
 kind = "web"
 previewPath = "/"
 title = "EventFlow AI"
-description = "A customer portal for planning events with small event-management companies. Customers can create and track event requests, review approved proposals, and submit change requests with demo data saved in the browser."
+description = "Unified EventFlow Customer and Business website with shared Supabase login and a same-origin Express API."
 version = "1.0.0"
 id = "artifacts/eventflow-ai"
 router = "path"
 
 [[services]]
 name = "web"
-paths = [ "/" ]
+paths = ["/"]
 localPort = 19894
 
 [services.development]
-run = "pnpm --filter @workspace/eventflow-ai run dev"
+run = "pnpm -w run preview:production"
 
 [services.production]
-build = [ "pnpm", "--filter", "@workspace/eventflow-ai", "run", "build" ]
-serve = "static"
-publicDir = "artifacts/eventflow-ai/dist/public"
+build = ["pnpm", "-w", "run", "build:production"]
 
-[[services.production.rewrites]]
-from = "/*"
-to = "/index.html"
+[services.production.run]
+args = ["pnpm", "-w", "run", "start:production"]
+
+[services.production.run.env]
+NODE_ENV = "production"
+
+[services.production.health.startup]
+path = "/api/healthz"
 
 [services.env]
 PORT = "19894"

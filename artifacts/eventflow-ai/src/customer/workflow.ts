@@ -1,4 +1,5 @@
 import { supabase } from "@/lib/supabase";
+import { asSelection, workflowRpc } from "@/lib/businessWorkflow";
 
 export type PlanSelection = {
   request_id: string; customer_id: string; proposal_id: string; plan_key: "A" | "B";
@@ -14,10 +15,10 @@ export function workflowErrorMessage(error: { code?: string; message: string }):
 }
 
 export async function savePlanSelection(requestId: string, proposalId: string): Promise<PlanSelection> {
-  const { data, error } = await supabase.rpc("eventflow_select_plan", {
+  const row = await workflowRpc("eventflow_select_plan", {
     p_request_id: requestId, p_proposal_id: proposalId,
   });
-  if (error) throw new Error(workflowErrorMessage(error));
+  const data = asSelection(row);
   if (!data || data.request_id !== requestId || data.proposal_id !== proposalId
     || !["pending", "approved", "changes_requested"].includes(data.decision)) {
     throw new Error("The saved selection could not be verified. Reload before trying again.");

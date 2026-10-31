@@ -6,4 +6,6 @@
  * OpenAPI spec version: 0.1.0
  */
 
-export type GeneratePersistedProposalPair200ProposalsItemPlanContent = { [key: string]: unknown };
+export interface BusinessRevisionRequest {
+  responseId: string;
+}

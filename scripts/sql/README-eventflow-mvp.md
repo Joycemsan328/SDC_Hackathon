@@ -1,47 +1,132 @@
-# EventFlow MVP activation — approval required
+# Business-first EventFlow workflow — REVIEW ONLY
 
-Exact migration: `scripts/sql/eventflow-mvp-workflow.sql`.
+**Not installed, activated, published, or tested against live SQL. No AI calls were made.**
+The older selection-first SQL has been replaced, not applied. This is an
+installation for a database with no EventFlow workflow objects. It deliberately
+fails if an earlier version was installed.
 
-**Not applied to your Supabase database.** No live RunPod generation was performed during implementation.
+## State machine and actors
 
-## What the migration does
+| From | Action | Actor | To |
+|---|---|---|---|
+| No managed revision / queued | Acquire expiring lease | Backend, verified owner | generating |
+| generating | Atomically insert A and B | Backend only | business_review |
+| business_review | Review and release the complete pair | Approved Business/admin | released |
+| released | Choose one released proposal | Approved owning customer | selected |
+| selected | Change choice before confirmation | Approved owning customer | selected |
+| released / selected | Request changes with message | Approved owning customer | old: changes_requested; new: queued |
+| selected | Confirm exact current choice/timestamp | Approved Business/admin | confirmed |
 
-- Adds a one-selection-per-request table for cross-device choice, Business decision, and message.
-- Adds a generation lease table to prevent concurrent paid generation.
-- Adds authenticated, ownership-checked selection, single-plan review, generation-claim and insert-only persistence functions.
-- Restricts read/write access using approved Customer/Business profiles and row-level security.
-- Does not update or delete existing requests, proposals, prices or plan content.
-- Does not use `approve_ai_proposal_pair`.
+Every new revision repeats generation → Business review/release. Old proposal
+rows, prices, release audit data and change messages are retained. The generator
+uses original requirements plus cumulative change messages. Overlong accumulated
+history is rejected rather than silently truncating instructions.
 
-After reviewing and approving the exact SQL, run it in your existing Supabase project's SQL Editor as the database owner. The transaction rolls back on an error; do not bypass an error by deleting existing data. Existing schema constraints are still enforced. The script was tested against a synthetic local schema, not applied against the live schema.
+## Mandatory catalog review before installation
 
-The Express server uses the existing public Supabase configuration plus the authenticated customer's bearer token. The persistence functions enforce ownership; no service-role key is placed in the browser.
+The owner's checks confirm UUID primary keys, request FK, A/B CHECK, no conflicting
+UNIQUE *constraint*, no reported triggers, and absent workflow objects.
+They do **not** include the effective RLS/privilege inventory or independent unique
+index definitions. This Agent could not retrieve those through the public API.
 
-## Preview test — existing proposals, no RunPod
+`eventflow-workflow-catalog-review.sql` is a **read-only script for later owner review**.
+It was not executed. Inspect its results for:
 
-1. Sign into the Customer Portal. Open `/events/a75b1974-0aa2-4517-a8a0-7dec86f60b24`.
-2. Confirm Plan A/B, services, itemized RM costs, and totals. Click Select Plan A or Select Plan B.
-3. Reload or sign in on another device: the selected plan must remain selected.
-4. Open the **Business Portal artifact**, sign in with an approved staff/admin account, and open `/approvals`.
-5. Only the chosen plan belongs in the queue. Open Full review to see the complete selected plan.
-6. Enter a message and click Request Changes. Within 10 seconds the customer sees the decision and message.
-7. On Customer, resubmit the same plan or select the other plan. Business can then approve that selected plan.
-8. Refresh Customer: Business approval and its optional message appear. The unselected proposal stays unchanged.
+1. All column types/defaults/nullability. `proposals.id` needs a UUID default;
+   omitted NOT NULL columns need defaults. Verify copied request types and JSON.
+2. `status` must accept `Pending Business Approval`; revision must support each
+   positive integer serialized as text. Check enum labels and CHECK definitions.
+3. Independent indexes, including expressions/partial indexes, must allow both
+   plan keys and multiple revisions. A missing UNIQUE constraint is not proof.
+4. All existing RLS policies, table/column grants, RLS/FORCE RLS and table ownership.
+5. Profile writes and RPCs: customers must not be able to change their own
+   role/account_type/approval_status or insert an approved staff/admin profile.
+6. Every existing SECURITY DEFINER RPC and view which reads or writes proposals.
+   Owner-rights views, materialized copies, legacy approval/persistence functions,
+   broad RPCs, or a leaked service key can bypass base-table RLS. They must be
+   revoked/secured in an explicit, separately reviewed compatibility addendum.
+   Do not blindly revoke all old functions; registration/admin features may use them.
+7. Triggers and trigger-function definitions, including profile and request
+   triggers, for side effects or authority escalation.
 
-Do not click Generate when testing existing proposals. Viewing, rechecking, selecting and reviewing never call RunPod.
+Until this review and any necessary addendum are complete, **NO-GO for activation**.
+The migration intentionally starts with `eventflow.catalog_reviewed = 'no'`.
+Only the owner should change that acknowledgement after resolving these items.
+The gate is a manual review safeguard, not an automatic security audit.
 
-## New request / generation test — intentionally invokes RunPod
+## Proposed database changes
 
-After the migration is applied, create a new event in Customer. Submission saves the request first, then invokes the existing Express/Qwen3-8B integration and atomically saves Plan A/B.
+- Add `eventflow_proposal_revisions` and `eventflow_generation_leases`.
+- Add ownership/staff helpers and server-only generation/persistence RPCs.
+- Add authenticated release, selection, change-request, confirmation, and
+  explicit legacy-adoption RPCs.
+- Enable proposal RLS and add a restrictive SELECT guard ANDed with all old
+  permissive policies. Customers see only their released pair IDs; unregistered
+  legacy proposals are hidden. Business sees existing proposals.
+- Add restrictive INSERT/UPDATE/DELETE guards for browser roles. This intentionally
+  blocks any existing browser-direct proposal-content edits; such workflows need
+  reviewed backend/RPC alternatives before activation.
+- New tables have no client write policies; lease data is backend-only.
+- Explicitly revoke PUBLIC/anon/authenticated execution from generation/persistence
+  RPCs, then grant only to service_role. Definer functions use empty search paths.
+- No updates/deletes to existing requests, proposals or profiles. Existing
+  proposals.status is not rewritten: new UI states derive from the revision ledger.
 
-If generation fails, the request remains saved. Retry uses the same request ID; saved proposals are read back rather than overwritten. An interrupted generation retains its safety lease for up to 10 minutes before another generation is allowed.
+Foreign keys intentionally restrict deletion of referenced records. This may
+affect older delete flows and must be accepted before installation.
 
-## Verification performed
+## Existing proposals
 
-- Full workspace type checks.
-- Production builds for Customer, Business and Express.
-- 33 API tests, using mocked RunPod responses.
-- Real PostgreSQL execution in a disposable local database using synthetic records: RLS, ownership, selection, messages, single-plan review, generation lease, insert-only persistence and retry safety.
-- Running API health and unauthenticated-generation rejection.
+No existing pair is automatically trusted, released or regenerated.
+After installation, approved Business staff can open an existing proposal under
+`/business/proposals`, choose **Register existing pair for Business review**,
+inspect both plans and then **Release both plans to Customer**.
+Adoption references existing IDs without editing the original proposal rows.
+Only an unambiguous, complete, latest positive-integer revision is accepted.
+Non-numeric revisions, duplicate/incomplete pairs, or ambiguous legacy data remain
+blocked for an owner-reviewed mapping. Older already-released revision history
+remains readable to its owner, but only the current released revision is selectable.
 
-Signed-in, cross-account live end-to-end verification remains blocked on applying the approved migration. The screenshot check reached the sign-in screen; it did not exercise authenticated controls.
+## Backend configuration (NAMES ONLY)
+
+Existing public config: `VITE_SUPABASE_URL`, `VITE_SUPABASE_PUBLISHABLE_KEY`.
+Optional server aliases: `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`.
+
+New server-only credential: `SUPABASE_SECRET_KEY` or `SUPABASE_SERVICE_ROLE_KEY`.
+Never use a VITE_ prefix. Nothing was requested, added or changed during preparation.
+
+Activation flag: `EVENTFLOW_BUSINESS_FIRST_ENABLED`. Keep absent/false until SQL
+and security review pass. The route returns 503 before RunPod when disabled.
+
+Existing generation credentials: `RUNPOD_API_KEY`, `RUNPOD_ENDPOINT_ID`.
+No browser ever receives privileged credentials, generation tokens, or draft JSON
+from the generation response.
+
+## Checks performed without SQL or paid calls
+
+- API tests inject mock AI and mock Supabase responses.
+- Contract generation and workspace TypeScript checks.
+- Static SQL guardrail assertions (not database execution/SQL syntax proof).
+- Production compilation and read-only health checks.
+- Browser verification must use intercepted Supabase/API fixtures only.
+
+Before deployment, test the SQL against an isolated matching schema after separate
+approval. Verify direct customer REST reads return no drafts, client persistence
+RPCs fail, profile self-promotion fails, staff can release both, other customers
+cannot read them, stale selections cannot be confirmed, retries do not regenerate,
+and revision 2 is hidden until another Business release. This was not proven by
+the mock/static tests and is a deployment blocker.
+
+No migration or seed runs during build/start. No public mock-AI switch was added.
+
+## Later activation sequence — not authorized in this preparation
+
+1. Complete catalog review and compatibility addendum; approve exact final SQL.
+2. Validate installation and RLS in an isolated schema with mock-generated fixtures.
+3. Take/verify a backup and coordinate an installation window. Existing legacy
+   visibility and browser-direct writes change when policies install.
+4. Install approved SQL. Keep generation disabled while verifying access controls.
+5. Add server-only credential through Secrets, then enable the activation flag.
+6. Explicitly register/release legacy pairs where appropriate.
+7. Run a separately authorized paid generation smoke test only if desired.
+8. Publish only after the owner separately authorizes deployment.

@@ -1,12 +1,20 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
+import { SUBMISSION_MVP, approveSubmissionPair } from "@/lib/submissionMvp";
 import SavedPlanReview, { persistReview, selectionErrorMessage, type PlanSelection, type ReviewDecision } from "./SavedPlanReview";
+import { asSelection, type WorkflowRevision } from "@/lib/businessWorkflow";
+import { CUSTOMER_RESPONSE_WORKFLOW_ENABLED, parseCustomerResponseRows, type CustomerResponseRecord } from "@/customer/customerResponses";
+import { parseCustomerResponseAction, type CustomerResponseAction } from "./customerResponseActions";
+import CustomerResponsesQueue from "./CustomerResponsesQueue";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ErrorBoundary } from "@/components/error-boundary";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/not-found";
 import CalendarManagementPage from "./calendar-management";
+import BusinessAccountPage from "./BusinessAccountPage";
+import EventDataStatus from "./EventDataStatus";
+import { readBusinessEvents, type EventItem } from "./events";
 import { useUnifiedAuth } from "@/auth/UnifiedAuth";
 import {
   Route,
@@ -44,7 +52,6 @@ import {
   Plus,
   Search,
   Send,
-  Settings2,
   Sparkles,
   Trash2,
   Users,
@@ -52,6 +59,7 @@ import {
   CalendarCheck,
   BriefcaseBusiness,
   ChartNoAxesCombined,
+  CircleUserRound,
   RotateCcw,
   Eye,
   MapPin,
@@ -69,11 +77,13 @@ type RequestStatus =
   | "Completed";
 type Req = {
   id: string;
+  updatedAt?: string | null;
   customer: string;
   email: string;
   phone: string;
   type: string;
   name: string;
+  eventName?: string;
   date: string;
   time: string;
   guests: number;
@@ -85,6 +95,7 @@ type Req = {
 };
 type SupabaseRequestRow = {
   id: string;
+  updated_at: string | null;
   customer_name: string | null;
   email: string | null;
   phone: string | null;
@@ -114,11 +125,13 @@ function mapSupabaseRequest(row: SupabaseRequestRow): Req {
     : "New";
   return {
     id: row.id,
+    updatedAt: row.updated_at,
     customer: row.customer_name?.trim() || "Customer",
     email: row.email?.trim() || "",
     phone: row.phone?.trim() || "",
     type: row.event_type?.trim() || "Event",
     name: row.event_name?.trim() || "Untitled event",
+    eventName: row.event_name?.trim() || undefined,
     date: row.event_date || "",
     time: row.event_time || "",
     guests: requestNumber(row.guests),
@@ -128,6 +141,21 @@ function mapSupabaseRequest(row: SupabaseRequestRow): Req {
     status,
     source: "supabase",
   };
+}
+function countRecentlyUpdatedRequests(
+  requests: readonly Pick<Req, "id" | "updatedAt">[],
+  now = Date.now(),
+): number {
+  const cutoff = now - 7 * 24 * 60 * 60 * 1000;
+  const recentRequestIds = new Set<string>();
+  for (const request of requests) {
+    if (!request.id || request.updatedAt == null) continue;
+    const updatedAt = Date.parse(request.updatedAt);
+    if (Number.isFinite(updatedAt) && updatedAt >= cutoff && updatedAt <= now) {
+      recentRequestIds.add(request.id);
+    }
+  }
+  return recentRequestIds.size;
 }
 function asObject(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -244,6 +272,9 @@ type Proposal = {
   planContent?: ProposalPlanContent;
   customerSelectedForReview?: boolean;
   selection?: PlanSelection;
+  workflowState?: WorkflowRevision["state"];
+  customerResponse?: CustomerResponseRecord;
+  customerResponseAction?: CustomerResponseAction;
 };
 type SupabaseProposalRow = {
   id: string;
@@ -266,17 +297,6 @@ type SupabaseProposalLineRow = {
   service: string | null;
   qty: number | null;
   price: number | string | null;
-};
-type EventItem = {
-  id: string;
-  customer: string;
-  name: string;
-  date: string;
-  time: string;
-  status: "Upcoming" | "Ongoing" | "Completed" | "Cancelled";
-  value: number;
-  type: string;
-  guests: number;
 };
 type BlockedSlot = { id: string; date: string; reason: string };
 type Supplier = {
@@ -304,7 +324,11 @@ type Store = {
 const DB_KEY = "eventflow-demo-v1";
 function isInApprovalQueue(proposal: Proposal): boolean {
   const isPending = proposal.status === "Pending Approval" || proposal.status === "Pending Business Approval";
-  return isPending && (proposal.source !== "supabase" || proposal.customerSelectedForReview === true);
+  return proposal.source === "supabase"
+    ? SUBMISSION_MVP
+      ? isPending && proposal.planKey === "A"
+      : (proposal.workflowState === "business_review" && proposal.planKey === "A") || (proposal.workflowState === "selected" && proposal.customerSelectedForReview === true)
+    : isPending;
 }
 const today = new Date();
 const dateAt = (offset: number) => {
@@ -586,6 +610,7 @@ const nav = [
     label: "Admin Approvals",
     icon: ClipboardCheck,
   },
+  { href: "/account", label: "My Account", icon: CircleUserRound },
 ];
 const money = (n: number) => `RM ${n.toLocaleString("en-MY")}`;
 const dateLabel = (
@@ -663,8 +688,17 @@ function App() {
   const [supabaseRequests, setSupabaseRequests] = useState<Req[]>([]);
   const [requestFetchState, setRequestFetchState] = useState<"idle" | "loading" | "loaded" | "error">("idle");
   const [requestFetchError, setRequestFetchError] = useState("");
+  const [supabaseEvents, setSupabaseEvents] = useState<EventItem[]>([]);
+  const [eventFetchState, setEventFetchState] = useState<"idle" | "loading" | "loaded" | "error">("idle");
+  const [eventFetchError, setEventFetchError] = useState("");
+  const [venueNamesUnavailable, setVenueNamesUnavailable] = useState(false);
   const [supabaseProposals, setSupabaseProposals] = useState<Proposal[]>([]);
+  const [customerResponses, setCustomerResponses] = useState<CustomerResponseRecord[]>([]);
+  const [customerResponseError, setCustomerResponseError] = useState("");
+  const [customerResponseActions, setCustomerResponseActions] = useState<CustomerResponseAction[]>([]);
+  const [customerResponseActionError, setCustomerResponseActionError] = useState("");
   const [planSelections, setPlanSelections] = useState<PlanSelection[]>([]);
+  const [workflowRevisions, setWorkflowRevisions] = useState<WorkflowRevision[]>([]);
   const [selectionError, setSelectionError] = useState("");
   const [remoteVersion, setRemoteVersion] = useState(0);
   const [proposalFetchState, setProposalFetchState] = useState<"idle" | "loading" | "loaded" | "error">("idle");
@@ -679,21 +713,87 @@ function App() {
     const refresh = () => setRemoteVersion((version) => version + 1);
     const timer = window.setInterval(refresh, 10_000);
     window.addEventListener("focus", refresh);
-    return () => { window.clearInterval(timer); window.removeEventListener("focus", refresh); };
+    window.addEventListener("eventflow-workflow-updated", refresh);
+    return () => { window.clearInterval(timer); window.removeEventListener("focus", refresh); window.removeEventListener("eventflow-workflow-updated", refresh); };
   }, [staffUserId]);
   useEffect(() => {
     let active = true;
-    if (!staffUserId) { setPlanSelections([]); setSelectionError(""); return; }
+    if (!staffUserId) { setPlanSelections([]); setWorkflowRevisions([]); setSelectionError(""); return; }
+    if (SUBMISSION_MVP) { setPlanSelections([]); setWorkflowRevisions([]); setSelectionError(""); return; }
     void (async () => {
       try {
-        const { data, error } = await supabase.from("eventflow_plan_selections")
-          .select("request_id, customer_id, proposal_id, plan_key, revision, decision, message, selected_at, reviewed_at");
+        const { data, error } = await supabase.from("eventflow_proposal_revisions").select("*");
         if (!active) return;
         if (error) { setSelectionError(selectionErrorMessage(error)); setPlanSelections([]); return; }
-        setPlanSelections((data ?? []) as PlanSelection[]);
+        const revisions = (data ?? []) as WorkflowRevision[];
+        setWorkflowRevisions(revisions);
+        setPlanSelections(revisions.flatMap(row => { const selected=asSelection(row); return selected ? [selected] : []; }));
         setSelectionError("");
       } catch { if (active) { setSelectionError("Saved customer selections could not be refreshed."); setPlanSelections([]); } }
     })();
+    return () => { active = false; };
+  }, [staffUserId, remoteVersion]);
+  useEffect(() => {
+    let active = true;
+    if (!staffUserId) {
+      setCustomerResponses([]);
+      setCustomerResponseError("");
+      setCustomerResponseActions([]);
+      setCustomerResponseActionError("");
+      return;
+    }
+    if (!CUSTOMER_RESPONSE_WORKFLOW_ENABLED) {
+      setCustomerResponses([]);
+      setCustomerResponseError("");
+      setCustomerResponseActions([]);
+      setCustomerResponseActionError("");
+      return;
+    }
+    void (async () => {
+      const { data, error } = await supabase
+        .from("eventflow_customer_responses")
+        .select("*")
+        .order("responded_at", { ascending: false });
+      if (!active) return;
+      if (error) {
+        setCustomerResponseError("Customer responses could not be refreshed. Previously displayed responses may be out of date.");
+        return;
+      }
+      try {
+        const responses = parseCustomerResponseRows(data ?? []);
+        if (!responses.length) {
+          setCustomerResponses([]);
+          setCustomerResponseError("");
+          setCustomerResponseActions([]);
+          setCustomerResponseActionError("");
+          return;
+        }
+        const { data: actionData, error: actionError } = await supabase
+          .from("eventflow_customer_response_actions")
+          .select("*")
+          .in("response_id", responses.map(response => response.id));
+        if (!active) return;
+        if (actionError) {
+          setCustomerResponseActionError(
+            ["42P01", "PGRST205"].includes(actionError.code ?? "")
+              ? "Business response actions require the reviewed additive database migration."
+              : "Business response actions could not be refreshed.",
+          );
+          return;
+        }
+        const actions = (actionData ?? []).map(parseCustomerResponseAction);
+        // Publish the response/action snapshot together: a completed response
+        // must not briefly look pending while its action record is loading.
+        setCustomerResponses(responses);
+        setCustomerResponseError("");
+        setCustomerResponseActions(actions);
+        setCustomerResponseActionError("");
+      } catch (error) {
+        setCustomerResponseActionError(error instanceof Error ? error.message : "Business response actions could not be verified.");
+      }
+    })().catch(() => {
+      if (active) setCustomerResponseError("Customer responses could not be refreshed.");
+    });
     return () => { active = false; };
   }, [staffUserId, remoteVersion]);
   useEffect(() => {
@@ -706,31 +806,74 @@ function App() {
     }
 
     let active = true;
-    setRequestFetchState("loading");
-    setRequestFetchError("");
+    // Poll in the background without replacing an already loaded/error notice.
+    setRequestFetchState((state) => state === "idle" ? "loading" : state);
 
     void (async () => {
       try {
         const { data, error } = await supabase
           .from("requests")
-          .select("id, customer_name, email, phone, event_name, event_type, event_date, event_time, guests, budget, services, notes, status")
+          .select("id, customer_name, email, phone, event_name, event_type, event_date, event_time, guests, budget, services, notes, status, updated_at")
           .order("created_at", { ascending: false, nullsFirst: false });
         if (!active) return;
         if (error) {
-          setSupabaseRequests([]);
           setRequestFetchError(error.message);
           setRequestFetchState("error");
           return;
         }
         setSupabaseRequests(((data ?? []) as SupabaseRequestRow[]).map(mapSupabaseRequest));
+        setRequestFetchError("");
         setRequestFetchState("loaded");
       } catch (error: unknown) {
         if (!active) return;
-        setSupabaseRequests([]);
         setRequestFetchError(error instanceof Error ? error.message : "Unexpected request loading error.");
         setRequestFetchState("error");
       }
     })();
+
+    return () => { active = false; };
+  }, [authLoading, staffUserId, remoteVersion]);
+  useEffect(() => {
+    if (authLoading) return;
+    if (!staffUserId) {
+      setSupabaseEvents([]);
+      setEventFetchState("idle");
+      setEventFetchError("");
+      setVenueNamesUnavailable(false);
+      return;
+    }
+
+    let active = true;
+    setEventFetchState((state) => state === "idle" ? "loading" : state);
+    void readBusinessEvents({
+      events: async () => await supabase
+        .from("events")
+        .select("id, proposal_id, customer_id, venue_id, event_name, event_date, event_time, event_end_time, event_type, guests, total_value, status")
+        .order("event_date", { ascending: true }),
+      proposals: async (ids) => await supabase
+        .from("proposals")
+        .select("id, request_id")
+        .in("id", ids),
+      requests: async (ids) => await supabase
+        .from("requests")
+        .select("id, customer_name")
+        .in("id", ids),
+      venues: async (ids) => await supabase
+        .from("venues")
+        .select("id, name")
+        .in("id", ids),
+    }).then(({ events, venueNamesUnavailable: venueNamesMissing }) => {
+      if (!active) return;
+      setSupabaseEvents(events);
+      setVenueNamesUnavailable(venueNamesMissing);
+      setEventFetchError("");
+      setEventFetchState("loaded");
+    }).catch((error: unknown) => {
+      if (!active) return;
+      setEventFetchError(error instanceof Error ? error.message : "Supabase Events could not be read.");
+      // Keep the most recent successful snapshot visible on refresh failures.
+      setEventFetchState("error");
+    });
 
     return () => { active = false; };
   }, [authLoading, staffUserId, remoteVersion]);
@@ -744,8 +887,7 @@ function App() {
     }
 
     let active = true;
-    setProposalFetchState("loading");
-    setProposalFetchError("");
+    setProposalFetchState((state) => state === "idle" ? "loading" : state);
 
     void (async () => {
       try {
@@ -755,7 +897,6 @@ function App() {
           .order("created_at", { ascending: false, nullsFirst: false });
         if (!active) return;
         if (error) {
-          setSupabaseProposals([]);
           setProposalFetchError(error.message);
           setProposalFetchState("error");
           return;
@@ -764,6 +905,7 @@ function App() {
         const rows = (data ?? []) as SupabaseProposalRow[];
         if (!rows.length) {
           setSupabaseProposals([]);
+          setProposalFetchError("");
           setProposalFetchState("loaded");
           return;
         }
@@ -774,7 +916,6 @@ function App() {
           .in("proposal_id", proposalIds);
         if (!active) return;
         if (lineError) {
-          setSupabaseProposals([]);
           setProposalFetchError(lineError.message);
           setProposalFetchState("error");
           return;
@@ -787,10 +928,10 @@ function App() {
           linesByProposal.set(line.proposal_id, lines);
         }
         setSupabaseProposals(rows.map((row) => mapSupabaseProposal(row, linesByProposal.get(row.id) ?? [])));
+        setProposalFetchError("");
         setProposalFetchState("loaded");
       } catch (error: unknown) {
         if (!active) return;
-        setSupabaseProposals([]);
         setProposalFetchError(error instanceof Error ? error.message : "Unexpected proposal loading error.");
         setProposalFetchState("error");
       }
@@ -827,13 +968,29 @@ function App() {
     return Array.from(merged.values());
   }, [store.requests, supabaseRequests]);
   const requestViewStore = useMemo(() => ({ ...store, requests: requestsForViews }), [store, requestsForViews]);
+  const eventViewStore = useMemo(() => {
+    const liveIds = new Set(supabaseEvents.map((event) => event.id));
+    const demoEvents = store.events
+      .filter((event) => !liveIds.has(event.id))
+      .map((event) => ({ ...event, source: "demo" as const }));
+    return { ...store, events: [...supabaseEvents, ...demoEvents] };
+  }, [store, supabaseEvents]);
   const proposalsForViews = useMemo(() => {
     const merged = new Map<string, Proposal>();
     for (const proposal of supabaseProposals) {
+      const latest = workflowRevisions.filter(row => row.request_id === proposal.requestId).sort((a,b)=>b.revision-a.revision)[0];
+      const current = latest && String(latest.revision) === proposal.revision;
       const selection = planSelections.find((item) => item.request_id === proposal.requestId && item.proposal_id === proposal.id
         && item.plan_key === proposal.planKey && item.revision === proposal.revision);
       const selected = !!selection;
-      const status = selection?.decision === "approved" ? "Approved for Customer"
+      const customerResponse = customerResponses.find((row) =>
+        row.request_id === proposal.requestId && row.revision === proposal.revision);
+      const customerResponseAction = customerResponse
+        ? customerResponseActions.find(row => row.response_id === customerResponse.id)
+        : undefined;
+      const status = current && latest.state === "confirmed" ? "Customer Accepted"
+        : current && latest.state === "released" ? "Approved for Customer"
+        : selection?.decision === "approved" ? "Approved for Customer"
         : selection?.decision === "changes_requested" ? "Changes Requested"
         : selected ? "Pending Business Approval" : proposal.status;
       merged.set(proposal.id, {
@@ -842,13 +999,16 @@ function App() {
         source: "supabase",
         customerSelectedForReview: selected,
         selection,
+        customerResponse,
+        customerResponseAction,
+        workflowState: current ? latest.state : undefined,
       });
     }
     for (const proposal of store.proposals) {
       if (!merged.has(proposal.id)) merged.set(proposal.id, { ...proposal, source: "demo" });
     }
     return Array.from(merged.values());
-  }, [store.proposals, supabaseProposals, planSelections]);
+  }, [store.proposals, supabaseProposals, planSelections, workflowRevisions, customerResponses, customerResponseActions]);
   const proposalViewStore = useMemo(() => ({ ...requestViewStore, proposals: proposalsForViews }), [requestViewStore, proposalsForViews]);
   const showRequestFetchStatus = requestFetchState !== "idle";
   useEffect(() => {
@@ -1015,6 +1175,14 @@ const reviewSelectedPlan = async (p: Proposal, decision: ReviewDecision, message
 };
 const approveProposal = async (p: Proposal): Promise<boolean> => {
   if (p.source === "supabase") {
+    if (SUBMISSION_MVP) {
+      try {
+        await approveSubmissionPair(p.requestId, p.revision);
+        setRemoteVersion(version => version + 1);
+        flash("Both Plan A and Plan B approved for Customer review.");
+        return true;
+      } catch (error) { flash(error instanceof Error ? error.message : "Pair approval failed."); return false; }
+    }
     const result = await reviewSelectedPlan(p, "approved", "");
     flash(result.error || `Selected Plan ${p.planKey} approved.`);
     return !result.error;
@@ -1094,15 +1262,6 @@ const approveProposal = async (p: Proposal): Promise<boolean> => {
     return true;
   };
 
-  const reset = () => {
-    if (
-      window.confirm("Reset all demo data to the original sample workspace?")
-    ) {
-      setStore(seed);
-      localStorage.removeItem(DB_KEY);
-      flash("Demo data restored");
-    }
-  };
   if (authLoading) {
     return (
       <div className="flex min-h-screen items-center justify-center">
@@ -1199,72 +1358,6 @@ const approveProposal = async (p: Proposal): Promise<boolean> => {
                     );
                   })}
               </nav>
-              <div className="mt-auto">
-                <div className="mb-4 rounded-2xl bg-[#ede4f1] p-4">
-                  <div className="mb-2 flex items-center gap-2 text-[#76538a]">
-                    <Sparkles size={15} />
-                    <span className="text-[11px] font-bold uppercase tracking-[.1em]">
-                      Studio note
-                    </span>
-                  </div>
-                  <p className="text-[12px] leading-[1.65] text-[#6f6179]">
-                    A little breathing room makes every celebration feel
-                    considered.
-                  </p>
-                  <button
-                    onClick={() => setLocation("/calendar")}
-                    className="mt-3 text-[11px] font-bold text-[#77518a] hover:underline"
-                    data-testid="button-view-availability"
-                  >
-                    View availability{" "}
-                    <ArrowRight className="ml-1 inline" size={12} />
-                  </button>
-                </div>
-                <button
-                  onClick={reset}
-                  className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-[11px] font-medium text-[#998fa0] hover:bg-white hover:text-[#6d4d7e]"
-                  data-testid="button-reset-demo"
-                >
-                  <RotateCcw size={14} /> Reset demo data
-                </button>
-
-                <button
-                  type="button"
-                  onClick={async () => {
-                    const { error } = await supabase.auth.signOut();
-                    if (error) {
-                      alert("Unable to log out: " + error.message);
-                    }
-                  }}
-                  className="flex w-full items-center rounded-xl px-3 py-2 text-left text-[11px] font-medium text-[#998fa0] hover:bg-white hover:text-[#6d4d7e]"
-                >
-                  Log Out
-                </button>
-
-                <div className="mt-3 flex items-center gap-3 border-t border-[#e8e0e9] px-2 pt-4">
-                  <div className="grid h-9 w-9 place-items-center rounded-full bg-[#e9d6e8] text-[12px] font-bold text-[#714981]">
-                    EC
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-[12px] font-bold">
-                      Elena Chong
-                    </p>
-                    <p className="text-[10px] text-[#928899]">
-                      Studio director
-                    </p>
-                  </div>
-                  <button
-                    aria-label="Workspace settings"
-                    onClick={() =>
-                      flash("You are viewing the studio demo workspace")
-                    }
-                    className="rounded-lg p-2 text-[#978b9e] hover:bg-white"
-                    data-testid="button-settings"
-                  >
-                    <Settings2 size={16} />
-                  </button>
-                </div>
-              </div>
             </aside>
             <main className="min-w-0 flex-1">
               <header className="sticky top-0 z-20 flex h-[72px] items-center justify-between border-b border-[#eee8ef] bg-[#fbf9f7]/95 px-4 backdrop-blur md:px-8">
@@ -1311,24 +1404,14 @@ const approveProposal = async (p: Proposal): Promise<boolean> => {
                       <span className="absolute right-1 top-1 h-2 w-2 rounded-full border border-white bg-[#d58ba9]" />
                     )}
                   </button>
-                  <button
-                    onClick={() => setModal({ kind: "request" })}
-                    className="flex h-9 items-center gap-2 rounded-full bg-[#77518a] px-3 text-[11px] font-bold text-white shadow-sm hover:bg-[#684578] sm:px-4 sm:text-[12px]"
-                    data-testid="button-global-new-request"
-                  >
-                    <Plus size={15} />
-                    <span className="hidden sm:inline">New request</span>
-                    <span className="sm:hidden">New</span>
-                  </button>
                 </div>
               </header>
               <div className="mx-auto max-w-[1440px] p-4 pb-12 md:px-8 md:py-7">
                 <ErrorBoundary resetKey={location}>
                   {selectionError && <p role="alert" className="mb-4 rounded-xl border border-[#efcfd1] bg-[#fff4f4] p-4 text-xs text-[#a34e58]" data-testid="status-plan-selection-error">{selectionError}</p>}
+                  {customerResponseError && <p role="alert" className="mb-4 rounded-xl border border-[#efcfd1] bg-[#fff4f4] p-4 text-xs text-[#a34e58]" data-testid="status-customer-response-error">{customerResponseError}</p>}
                   <Switch>
-                    <Route
-                      path="/"
-                      component={() => (
+                    <Route path="/">
                         <Dashboard
                           store={requestViewStore}
                           setLocation={setLocation}
@@ -1336,12 +1419,10 @@ const approveProposal = async (p: Proposal): Promise<boolean> => {
                           requestFetchState={requestFetchState}
                           requestFetchError={requestFetchError}
                           supabaseRequestCount={supabaseRequests.length}
+                          recentlyUpdatedRequestCount={countRecentlyUpdatedRequests(supabaseRequests)}
                         />
-                      )}
-                    />
-                    <Route
-                      path="/requests"
-                      component={() => (
+                    </Route>
+                    <Route path="/requests">
                         <Requests
                           store={requestViewStore}
                           setLocation={setLocation}
@@ -1350,19 +1431,15 @@ const approveProposal = async (p: Proposal): Promise<boolean> => {
                           requestFetchError={requestFetchError}
                           supabaseRequestCount={supabaseRequests.length}
                         />
-                      )}
-                    />
-                    <Route
-                      path="/requests/:id"
-                      component={() => (
+                    </Route>
+                    <Route path="/requests/:id">
                         <RequestDetail
                           store={requestViewStore}
                           updateRequest={updateRequest}
                           createProposal={createProposal}
                           setLocation={setLocation}
                         />
-                      )}
-                    />
+                    </Route>
                     <Route path="/proposals">
                         <Proposals
                           store={proposalViewStore}
@@ -1370,6 +1447,7 @@ const approveProposal = async (p: Proposal): Promise<boolean> => {
                           proposalFetchState={proposalFetchState}
                           proposalFetchError={proposalFetchError}
                           supabaseProposalCount={supabaseProposals.length}
+                          customerResponseError={customerResponseError}
                         />
                     </Route>
                     <Route path="/proposals/:id">
@@ -1380,6 +1458,7 @@ const approveProposal = async (p: Proposal): Promise<boolean> => {
                           reviewSelection={reviewSelectedPlan}
                           accept={acceptProposal}
                           flash={flash}
+                          customerResponseError={customerResponseError}
                         />
                     </Route>
                     <Route path="/approvals">
@@ -1390,24 +1469,29 @@ const approveProposal = async (p: Proposal): Promise<boolean> => {
                           reviewSelection={reviewSelectedPlan}
                           saveProposal={saveProposal}
                           flash={flash}
+                          customerResponses={customerResponses}
+                          customerResponseActions={customerResponseActions}
+                          customerResponseError={customerResponseError}
+                          customerResponseActionError={customerResponseActionError}
+                          onCustomerResponseActionSaved={() => setRemoteVersion(version => version + 1)}
                         />
                     </Route>
-                    <Route
-                      path="/events"
-                      component={() => (
+                    <Route path="/events">
                         <EventsWithCreate
-                          store={store}
+                          store={eventViewStore}
                           setLocation={setLocation}
                           openModal={setModal}
+                          eventFetchState={eventFetchState}
+                          eventFetchError={eventFetchError}
+                          venueNamesUnavailable={venueNamesUnavailable}
                         />
-                      )}
-                    />
-                    <Route
-                      path="/events/:id"
-                      component={() => (
+                    </Route>
+                    <Route path="/events/:id">
                         <EventDetail
-                          store={store}
+                          store={eventViewStore}
                           setLocation={setLocation}
+                          eventFetchState={eventFetchState}
+                          eventFetchError={eventFetchError}
                           updateEvent={(
                             id: string,
                             status: EventItem["status"],
@@ -1420,37 +1504,34 @@ const approveProposal = async (p: Proposal): Promise<boolean> => {
                             }))
                           }
                         />
-                      )}
-                    />
-                    <Route
-                      path="/calendar"
-                      component={() => (
+                    </Route>
+                    <Route path="/calendar">
                         <CalendarManagementPage
-                          store={store}
+                          store={eventViewStore}
                           openModal={setModal}
                           unblockSlot={unblockSlot}
+                          eventFetchState={eventFetchState}
+                          eventFetchError={eventFetchError}
+                          venueNamesUnavailable={venueNamesUnavailable}
+                          allowLocalEventCreation={false}
                         />
-                      )}
-                    />
-                    <Route
-                      path="/suppliers"
-                      component={() => (
+                    </Route>
+                    <Route path="/suppliers">
                         <Suppliers
                           store={store}
                           openModal={setModal}
                           setStore={setStore}
                         />
-                      )}
-                    />
-                    <Route
-                      path="/reports"
-                      component={() => <Reports store={store} />}
-                    />
-                    <Route
-                      path="/admin-approvals"
-                      component={() =>
-                        isAdmin ? (
-                          <AdminApprovalsPage />
+                    </Route>
+                    <Route path="/reports">
+                      <Reports store={store} />
+                    </Route>
+                    <Route path="/account">
+                      <BusinessAccountPage />
+                    </Route>
+                    <Route path="/admin-approvals">
+                      {isAdmin ? (
+                          <AdminApprovalsPage refreshVersion={remoteVersion} />
                         ) : (
                           <div className="rounded-xl border bg-white p-6">
                             <h2 className="text-xl font-bold">Access Denied</h2>
@@ -1459,9 +1540,8 @@ const approveProposal = async (p: Proposal): Promise<boolean> => {
                               page.
                             </p>
                           </div>
-                        )
-                      }
-                    />
+                        )}
+                    </Route>
                     <Route component={NotFound} />
                   </Switch>
                 </ErrorBoundary>
@@ -1555,6 +1635,8 @@ function Button({
   variant = "primary",
   testid,
   type = "button",
+  disabled = false,
+  title,
 }: any) {
   const styles =
     variant === "primary"
@@ -1567,7 +1649,9 @@ function Button({
       type={type}
       onClick={onClick}
       data-testid={testid}
-      className={`inline-flex min-h-9 items-center justify-center gap-2 rounded-xl px-3.5 py-2 text-[12px] font-bold transition duration-150 active:scale-[.98] ${styles}`}
+      disabled={disabled}
+      title={title}
+      className={`inline-flex min-h-9 items-center justify-center gap-2 rounded-xl px-3.5 py-2 text-[12px] font-bold transition duration-150 active:scale-[.98] ${styles} ${disabled ? "cursor-not-allowed opacity-50" : ""}`}
     >
       {children}
     </button>
@@ -1583,6 +1667,7 @@ function Status({ value }: { value: string }) {
     Completed: "bg-[#e6eff8] text-[#537a9b]",
     Draft: "bg-[#f0eafb] text-[#765697]",
     Upcoming: "bg-[#fcecf3] text-[#a3547c]",
+    Confirmed: "bg-[#f7e6ef] text-[#9e537b]",
     Ongoing: "bg-[#e6f3eb] text-[#4e8062]",
     Cancelled: "bg-[#fce9e7] text-[#a3524b]",
     Available: "bg-[#e6f3eb] text-[#4e8062]",
@@ -1614,15 +1699,15 @@ function SectionTitle({ children, aside }: any) {
     </div>
   );
 }
-function Metric({ label, value, detail, icon: Icon, tone = "lavender" }: any) {
+function Metric({ label, value, detail, icon: Icon, tone = "lavender", href }: any) {
   const bgs: any = {
     lavender: "bg-[#eee7f4] text-[#76528a]",
     rose: "bg-[#f8e8ef] text-[#a35a7d]",
     sage: "bg-[#e8f1ec] text-[#59816d]",
     gold: "bg-[#f7f0df] text-[#9a7a3e]",
   };
-  return (
-    <Panel className="p-4 md:p-5">
+  const card = (
+    <Panel className={`p-4 md:p-5 ${href ? "transition-shadow group-hover:shadow-md" : ""}`}>
       <div className="flex items-start justify-between">
         <span className="text-[11px] font-semibold text-[#8e8492]">
           {label}
@@ -1642,6 +1727,17 @@ function Metric({ label, value, detail, icon: Icon, tone = "lavender" }: any) {
       <div className="mt-1 text-[10px] text-[#a098a5]">{detail}</div>
     </Panel>
   );
+  if (!href) return card;
+  return (
+    <Link
+      href={href}
+      aria-label={`Open ${label}`}
+      data-testid={`link-dashboard-metric-${label.toLowerCase().replaceAll(" ", "-")}`}
+      className="group block cursor-pointer rounded-2xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#bd91b2] focus-visible:ring-offset-2"
+    >
+      {card}
+    </Link>
+  );
 }
 function RequestFetchNotice({ state, error, count }: {
   state: "idle" | "loading" | "loaded" | "error";
@@ -1652,7 +1748,7 @@ function RequestFetchNotice({ state, error, count }: {
   const message = state === "loading"
     ? "Loading saved customer requests from Supabase. Demo samples remain available below."
     : state === "error"
-      ? `Could not load live requests from Supabase: ${error}. Demo samples are still shown separately.`
+      ? `Could not refresh live requests from Supabase: ${error}. Previously loaded requests may be out of date. Demo samples are shown separately.`
       : count === 0
         ? "No saved customer requests were found in Supabase. Demo samples are still shown separately."
         : `${count} saved ${count === 1 ? "request" : "requests"} loaded from Supabase. Demo samples are labelled separately.`;
@@ -1666,7 +1762,7 @@ function RequestFetchNotice({ state, error, count }: {
     </div>
   );
 }
-function Dashboard({ store, setLocation, openModal, requestFetchState, requestFetchError, supabaseRequestCount }: any) {
+function Dashboard({ store, setLocation, openModal, requestFetchState, requestFetchError, supabaseRequestCount, recentlyUpdatedRequestCount }: any) {
   const pending = store.proposals.filter(
     (p: Proposal) => p.status === "Pending Approval",
   );
@@ -1694,6 +1790,7 @@ function Dashboard({ store, setLocation, openModal, requestFetchState, requestFe
       <div className="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Metric
           label="Open requests"
+          href="/requests"
           value={
             store.requests.filter(
               (r: Req) => !["Completed", "Approved"].includes(r.status),
@@ -1704,26 +1801,16 @@ function Dashboard({ store, setLocation, openModal, requestFetchState, requestFe
           tone="lavender"
         />
         <Metric
-          label="Updated requests/proposals"
-          value={money(
-            store.proposals
-              .filter((p: Proposal) => p.status !== "Approved")
-              .reduce(
-                (a: number, p: Proposal) =>
-                  a +
-                  p.lines.reduce(
-                    (b: number, l: Line) => b + l.qty * l.price,
-                    0,
-                  ),
-                0,
-              ),
-          )}
-          detail="Across active proposals"
-          icon={CircleDollarSign}
+          label="Recently Updated Requests"
+          href="/requests"
+          value={requestFetchState === "loaded" ? recentlyUpdatedRequestCount : "—"}
+          detail="Requests updated in the last 7 days"
+          icon={Activity}
           tone="rose"
         />
         <Metric
           label="Confirmed events"
+          href="/events"
           value={
             store.events.filter(
               (e: EventItem) =>
@@ -1736,6 +1823,7 @@ function Dashboard({ store, setLocation, openModal, requestFetchState, requestFe
         />
         <Metric
           label="Awaiting approval"
+          href="/approvals"
           value={pending.length}
           detail="Proposal review queue"
           icon={ClipboardCheck}
@@ -1988,6 +2076,10 @@ function Empty({ title, action, cta = "Add new" }: any) {
 function Requests({ store, setLocation, openModal, requestFetchState, requestFetchError, supabaseRequestCount }: any) {
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("All");
+  const requestHeading = (request: Req) => {
+    const eventName = request.source === "supabase" ? request.eventName : request.name;
+    return eventName ? `${request.customer} - ${eventName}` : request.customer;
+  };
   const filtered = store.requests.filter(
     (r: Req) =>
       (filter === "All" || r.status === filter) &&
@@ -2070,7 +2162,7 @@ function Requests({ store, setLocation, openModal, requestFetchState, requestFet
                   data-testid={`row-request-${r.id}`}
                 >
                   <td className="px-5 py-4">
-                    <div className="text-[12px] font-bold">{r.customer}</div>
+                    <div className="text-[12px] font-bold">{requestHeading(r)}</div>
                     <div className="mt-1 text-[10px] text-[#9a919f]">
                       {r.id} · {r.name} · {r.source === "supabase" ? "Saved request" : "Demo sample"}
                     </div>
@@ -2110,7 +2202,7 @@ function Requests({ store, setLocation, openModal, requestFetchState, requestFet
             >
               <div className="flex justify-between gap-2">
                 <div>
-                  <div className="text-[12px] font-bold">{r.customer}</div>
+                  <div className="text-[12px] font-bold">{requestHeading(r)}</div>
                   <p className="mt-1 text-[10px] text-[#968b9b]">
                     {r.name} · {r.id} · {r.source === "supabase" ? "Saved request" : "Demo sample"}
                   </p>
@@ -2323,7 +2415,7 @@ function ProposalFetchNotice({ state, error, count }: {
   const message = state === "loading"
     ? "Loading saved proposals from Supabase. Demo proposals remain available below."
     : state === "error"
-      ? `Could not load saved proposals from Supabase: ${error}. Demo proposals are still shown separately.`
+      ? `Could not refresh saved proposals from Supabase: ${error}. Previously loaded proposals may be out of date. Demo proposals are shown separately.`
       : count === 0
         ? "No saved proposals were found in Supabase. Demo proposals are still shown separately."
         : `${count} saved ${count === 1 ? "proposal" : "proposals"} loaded from Supabase. Demo proposals are labelled separately.`;
@@ -2333,7 +2425,7 @@ function ProposalFetchNotice({ state, error, count }: {
     </div>
   );
 }
-function Proposals({ store, setLocation, proposalFetchState, proposalFetchError, supabaseProposalCount }: any) {
+function Proposals({ store, setLocation, proposalFetchState, proposalFetchError, supabaseProposalCount, customerResponseError }: any) {
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("All");
   const list = store.proposals.filter(
@@ -2379,6 +2471,7 @@ function Proposals({ store, setLocation, proposalFetchState, proposalFetchError,
         ))}
       </div>
       <ProposalFetchNotice state={proposalFetchState} error={proposalFetchError} count={supabaseProposalCount} />
+      {customerResponseError && <p role="alert" className="mb-4 rounded-xl border border-[#efcfd1] bg-[#fff4f4] p-4 text-xs text-[#a34e58]" data-testid="status-customer-response-error">{customerResponseError}</p>}
       <div className="mb-4 relative max-w-sm">
         <Search
           size={15}
@@ -2437,6 +2530,11 @@ function ProposalCard({ proposal: p, setLocation }: any) {
               {p.source === "supabase" && (
                 <p className="mt-1 text-[10px] text-[#817486]">{p.customerSelectedForReview ? `Customer selected Plan ${p.planKey} · saved to Supabase` : "Saved proposal · not selected for review"} · Request {p.requestId}</p>
               )}
+              {CUSTOMER_RESPONSE_WORKFLOW_ENABLED && p.customerResponse && <p className="mt-1 text-[10px] font-bold text-[#64806b]" data-testid={`text-customer-response-${p.id}`}>
+                {p.customerResponse.response_kind === "selection"
+                  ? `Customer selected Plan ${p.customerResponse.selected_proposal_id === p.customerResponse.plan_a_id ? "A" : "B"}`
+                  : "Customer Change Request received"}
+              </p>}
             </div>
             <Status value={p.status} />
           </div>
@@ -2486,7 +2584,7 @@ function Moodboard({ type }: any) {
     </div>
   );
 }
-function ProposalDetail({ store, saveProposal, approve, reviewSelection, accept, flash }: any) {
+function ProposalDetail({ store, saveProposal, approve, reviewSelection, accept, flash, customerResponseError }: any) {
   const { id = "" } = useParams();
   const p0: Proposal | undefined = store.proposals.find(
     (x: Proposal) => x.id === id,
@@ -2498,7 +2596,12 @@ function ProposalDetail({ store, saveProposal, approve, reviewSelection, accept,
   if (!p) return <NotFound />;
   const total = p.lines.reduce((a, l) => a + l.qty * l.price, 0);
   const req = store.requests.find((r: Req) => r.id === p.requestId);
-  if (p.source === "supabase") return <SavedProposalDetail proposal={p0 ?? p} request={req} reviewSelection={reviewSelection} />;
+  if (p.source === "supabase") return <SavedProposalDetail
+    proposal={p0 ?? p}
+    request={req}
+    reviewSelection={reviewSelection}
+    customerResponseError={customerResponseError}
+  />;
   const patch = (next: Proposal) => {
     setP(next);
     saveProposal(next);
@@ -2798,7 +2901,12 @@ function ProposalDetail({ store, saveProposal, approve, reviewSelection, accept,
     </div>
   );
 }
-function SavedProposalDetail({ proposal: p, request, reviewSelection }: { proposal: Proposal; request?: Req; reviewSelection: (proposal: Proposal, decision: ReviewDecision, message: string) => Promise<{ error?: string }> }) {
+function SavedProposalDetail({ proposal: p, request, reviewSelection, customerResponseError }: {
+  proposal: Proposal;
+  request?: Req;
+  reviewSelection: (proposal: Proposal, decision: ReviewDecision, message: string) => Promise<{ error?: string }>;
+  customerResponseError?: string;
+}) {
   const content = p.planContent;
   const breakdown = content?.costBreakdown?.length
     ? content.costBreakdown
@@ -2818,7 +2926,7 @@ function SavedProposalDetail({ proposal: p, request, reviewSelection }: { propos
       <div className="mb-4 rounded-xl border border-[#e7dfe9] bg-[#fbf8fc] px-4 py-3 text-xs text-[#74677b]" role="note">
         {p.customerSelectedForReview
           ? `Customer selected Plan ${p.planKey} for review. This choice is saved in Supabase and available across devices.`
-          : "Saved proposal · Read-only. Only a customer-selected plan appears in the approval queue."}
+          : "Business reviews both plans and releases the pair first. After Customer selection, Business confirms the final choice."}
       </div>
       <div className="grid gap-5 xl:grid-cols-[1.55fr_1fr]">
         <div className="space-y-5">
@@ -2872,7 +2980,23 @@ function SavedProposalDetail({ proposal: p, request, reviewSelection }: { propos
           )}
         </div>
         <aside className="space-y-5">
-          <Panel className="p-5"><SectionTitle>Business decision</SectionTitle><div className="mt-3"><SavedPlanReview key={`${p.selection?.proposal_id}-${p.selection?.selected_at}`} selection={p.selection} onReview={(decision, message) => reviewSelection(p, decision, message)} /></div></Panel>
+          <Panel className="p-5"><SectionTitle>Business review and release</SectionTitle><div className="mt-3"><SavedPlanReview requestId={p.requestId} revision={p.revision} key={`${p.workflowState}-${p.selection?.proposal_id}-${p.selection?.selected_at}`} selection={p.selection} onReview={(decision, message) => reviewSelection(p, decision, message)} /></div></Panel>
+          {CUSTOMER_RESPONSE_WORKFLOW_ENABLED && p.customerResponse && <Panel className="p-5" data-testid={`customer-response-detail-${p.id}`}>
+            <SectionTitle>Customer response</SectionTitle>
+            <p className="mt-2 text-sm font-semibold text-[#5d5263]">
+              {p.customerResponse.response_kind === "selection"
+                ? `Customer selected Plan ${p.customerResponse.selected_proposal_id === p.customerResponse.plan_a_id ? "A" : "B"}`
+                : "Change Request"}
+            </p>
+            {p.customerResponse.response_kind === "change_request" && <p className="mt-2 whitespace-pre-wrap text-[12px] leading-relaxed text-[#756b7b]" data-testid={`text-customer-change-feedback-${p.id}`}>{p.customerResponse.feedback}</p>}
+            <p className="mt-2 text-[10px] text-[#a198a4]" data-testid={`text-customer-response-time-${p.id}`}>
+              Received {new Date(p.customerResponse.responded_at).toLocaleString()}
+            </p>
+            <p className="mt-3 text-[11px] text-[#756b7b]">
+              {p.customerResponseAction ? `Business action: ${p.customerResponseAction.status}. ` : ""}
+              Customer response actions are managed in Approvals.
+            </p>
+          </Panel>}
           <Panel className="p-5">
             <SectionTitle>Linked customer request</SectionTitle>
             <div className="mt-3 space-y-3 text-[11px]">
@@ -2891,15 +3015,24 @@ function SavedProposalDetail({ proposal: p, request, reviewSelection }: { propos
     </div>
   );
 }
-function Approvals({ store, setLocation, approve, reviewSelection, saveProposal, flash }: any) {
+function Approvals({ store, setLocation, approve, reviewSelection, saveProposal, flash, customerResponses, customerResponseActions, customerResponseError, customerResponseActionError, onCustomerResponseActionSaved }: any) {
   const pending = store.proposals.filter((p: Proposal) => isInApprovalQueue(p));
   return (
     <div className="fade-in">
       <PageHeading
         eyebrow="The finishing touch"
         title="Approval queue"
-        subtitle="A clear, considered review before every proposal is shared with a customer."
+        subtitle="Review Customer responses and pending proposal releases."
       />
+      {CUSTOMER_RESPONSE_WORKFLOW_ENABLED && <CustomerResponsesQueue
+        responses={customerResponses}
+        actions={customerResponseActions}
+        requests={store.requests}
+        proposals={store.proposals.filter((proposal: Proposal) => proposal.source === "supabase")}
+        error={[customerResponseError, customerResponseActionError].filter(Boolean).join(" ") || undefined}
+        onSaved={onCustomerResponseActionSaved}
+      />}
+      <h2 className="mb-4 text-[15px] font-bold text-[#5d5263]">AI proposal reviews</h2>
       <div className="mb-5 grid grid-cols-2 gap-3 md:grid-cols-3">
         <Metric
           label="Waiting for review"
@@ -2947,7 +3080,7 @@ function Approvals({ store, setLocation, approve, reviewSelection, saveProposal,
       ) : (
         <Panel>
           <Empty
-            title="Your approval queue is clear"
+            title="No AI proposals awaiting review"
             action={() => setLocation("/proposals")}
             cta="View all proposals"
           />
@@ -3023,9 +3156,9 @@ function ApprovalCard({ p, approve, reviewSelection, saveProposal, setLocation, 
           </button>
         ))}
       </div>
-     
+
 {isSaved ? (
-  <div className="mt-4 border-t border-[#f1edf1] pt-4"><SavedPlanReview key={`${p.selection?.proposal_id}-${p.selection?.selected_at}`} selection={p.selection} onReview={(decision, message) => reviewSelection(p, decision, message)} /></div>
+  <div className="mt-4 border-t border-[#f1edf1] pt-4"><SavedPlanReview requestId={p.requestId} revision={p.revision} key={`${p.workflowState}-${p.selection?.proposal_id}-${p.selection?.selected_at}`} selection={p.selection} onReview={(decision, message) => reviewSelection(p, decision, message)} /></div>
 ) : (
 
       <div className="mt-4 flex flex-wrap justify-end gap-2 border-t border-[#f1edf1] pt-4">
@@ -3054,7 +3187,7 @@ function ApprovalCard({ p, approve, reviewSelection, saveProposal, setLocation, 
     </Panel>
   );
 }
-function Events({ store, setLocation }: any) {
+function Events({ store, setLocation, eventFetchState, eventFetchError, venueNamesUnavailable }: any) {
   const [filter, setFilter] = useState("All");
   const [search, setSearch] = useState("");
   const events = store.events
@@ -3068,6 +3201,12 @@ function Events({ store, setLocation }: any) {
     .sort((a: EventItem, b: EventItem) => a.date.localeCompare(b.date));
   return (
     <div className="fade-in">
+      <EventDataStatus
+        state={eventFetchState}
+        error={eventFetchError}
+        eventCount={store.events.filter((event: EventItem) => event.source === "supabase").length}
+        venueNamesUnavailable={venueNamesUnavailable}
+      />
       <PageHeading
         eyebrow="Celebrations in motion"
         title="Events"
@@ -3097,8 +3236,8 @@ function Events({ store, setLocation }: any) {
               data-testid="input-search-events"
             />
           </div>
-          <div className="flex gap-2">
-            {["All", "Upcoming", "Ongoing", "Completed", "Cancelled"].map(
+          <div className="flex flex-wrap gap-2">
+            {["All", "Confirmed", "Upcoming", "Ongoing", "Completed", "Cancelled"].map(
               (s) => (
                 <button
                   key={s}
@@ -3129,13 +3268,15 @@ function Events({ store, setLocation }: any) {
                     {e.name}
                   </span>
                   <Status value={e.status} />
+                  {e.source === "demo" && <span className="rounded-full bg-[#f2eff3] px-2 py-1 text-[9px] font-bold text-[#827588]">Demo</span>}
                 </div>
                 <p className="mt-1 text-[10px] text-[#918695]">
                   {e.customer} · {e.id}
                 </p>
                 <p className="mt-1 text-[10px] text-[#8f8494]">
-                  {dateLabel(e.date)} · {e.time} · {e.guests} guests
+                  {dateLabel(e.date)} · {e.time}{e.endTime ? `–${e.endTime}` : ""} · {e.guests == null ? "Guest count not set" : `${e.guests} guests`}
                 </p>
+                {e.venueId && <p className="mt-1 text-[10px] text-[#8f8494]">{e.venueName || "Venue booking"}</p>}
               </div>
               <div className="text-right">
                 <div className="text-[12px] font-bold">{money(e.value)}</div>
@@ -3147,34 +3288,60 @@ function Events({ store, setLocation }: any) {
             </button>
           ))}
         </div>
-        {!events.length && <Empty title="No events in this view" />}
+        {!events.length && (
+          <Empty
+            title={eventFetchState === "loading" ? "Loading Events…" : eventFetchState === "error" ? "Live Events could not be loaded" : "No events in this view"}
+          />
+        )}
       </Panel>
     </div>
   );
 }
-function EventsWithCreate({ store, setLocation, openModal }: any) {
+function EventsWithCreate({ store, setLocation, openModal, eventFetchState, eventFetchError, venueNamesUnavailable }: any) {
   return (
     <div>
       <div className="mb-3 flex justify-end">
         <Button
+          disabled
+          title="Supabase event creation will be available in Phase 3B."
           onClick={() => openModal({ kind: "event" })}
           testid="button-create-event"
         >
           <Plus size={14} /> Create event
         </Button>
       </div>
-      <Events store={store} setLocation={setLocation} />
+      <Events
+        store={store}
+        setLocation={setLocation}
+        eventFetchState={eventFetchState}
+        eventFetchError={eventFetchError}
+        venueNamesUnavailable={venueNamesUnavailable}
+      />
     </div>
   );
 }
-function EventDetail({ store, setLocation, updateEvent }: any) {
+function EventDetail({ store, setLocation, updateEvent, eventFetchState, eventFetchError }: any) {
   const { id = "" } = useParams();
   const e: EventItem | undefined = store.events.find(
     (x: EventItem) => x.id === id,
   );
+  if (!e && eventFetchState !== "loaded") {
+    return (
+      <EventDataStatus
+        state={eventFetchState === "idle" ? "loading" : eventFetchState}
+        error={eventFetchError}
+        eventCount={store.events.filter((event: EventItem) => event.source === "supabase").length}
+      />
+    );
+  }
   if (!e) return <NotFound />;
   return (
     <div className="fade-in">
+      <EventDataStatus
+        state={eventFetchState}
+        error={eventFetchError}
+        eventCount={store.events.filter((event: EventItem) => event.source === "supabase").length}
+      />
       <button
         onClick={() => setLocation("/events")}
         className="mb-5 flex items-center gap-2 text-[11px] font-bold text-[#8e7a96]"
@@ -3183,7 +3350,7 @@ function EventDetail({ store, setLocation, updateEvent }: any) {
         <ArrowLeft size={15} /> All events
       </button>
       <PageHeading
-        eyebrow={`${e.id} · ${e.type}`}
+        eyebrow={`${e.id} · ${e.type}${e.source === "demo" ? " · Demo" : ""}`}
         title={e.name}
         subtitle={`A celebration for ${e.customer}`}
         action={<Status value={e.status} />}
@@ -3196,7 +3363,7 @@ function EventDetail({ store, setLocation, updateEvent }: any) {
             </p>
             <p className="serif mt-2 text-[30px] text-[#4d3e54]">{e.name}</p>
             <p className="mt-2 text-[12px] text-[#847389]">
-              {e.customer} · {e.guests} guests
+              {e.customer} · {e.guests == null ? "Guest count not set" : `${e.guests} guests`}
             </p>
           </div>
           <div className="grid grid-cols-2 gap-5 p-5 md:grid-cols-4">
@@ -3210,7 +3377,7 @@ function EventDetail({ store, setLocation, updateEvent }: any) {
               <p className="text-[9px] font-bold uppercase tracking-[.12em] text-[#a49aa8]">
                 Start time
               </p>
-              <p className="mt-2 text-[12px] font-bold">{e.time}</p>
+              <p className="mt-2 text-[12px] font-bold">{e.time}{e.endTime ? `–${e.endTime}` : ""}</p>
             </div>
             <div>
               <p className="text-[9px] font-bold uppercase tracking-[.12em] text-[#a49aa8]">
@@ -3224,6 +3391,12 @@ function EventDetail({ store, setLocation, updateEvent }: any) {
               </p>
               <p className="mt-2 text-[12px] font-bold">{money(e.value)}</p>
             </div>
+            {e.venueId && (
+              <div>
+                <p className="text-[9px] font-bold uppercase tracking-[.12em] text-[#a49aa8]">Venue</p>
+                <p className="mt-2 text-[12px] font-bold">{e.venueName || "Venue booking"}</p>
+              </div>
+            )}
           </div>
         </Panel>
         <Panel className="p-5">
@@ -3234,13 +3407,16 @@ function EventDetail({ store, setLocation, updateEvent }: any) {
           <select
             value={e.status}
             onChange={(ev) => updateEvent(e.id, ev.target.value)}
+            disabled={e.source === "supabase"}
+            title={e.source === "supabase" ? "Live Event editing will be available in Phase 3B." : undefined}
             className="h-10 w-full rounded-xl border border-[#eee7ef] bg-white px-3 text-[12px]"
             data-testid="select-event-status"
           >
-            {["Upcoming", "Ongoing", "Completed", "Cancelled"].map((s) => (
+            {["Confirmed", "Upcoming", "Ongoing", "Completed", "Cancelled"].map((s) => (
               <option key={s}>{s}</option>
             ))}
           </select>
+          {e.source === "supabase" && <p className="mt-2 text-[10px] text-[#95899a]">Live Event status changes will be connected in Phase 3B.</p>}
           <div className="mt-5 rounded-xl bg-[#f8f3f9] p-4">
             <p className="text-[10px] font-bold uppercase tracking-[.12em] text-[#9a7ca0]">
               Reserved calendar slot
@@ -4455,7 +4631,7 @@ function Router() {
   );
 }
 export default App;
-function AdminApprovalsPage() {
+function AdminApprovalsPage({ refreshVersion = 0 }: { refreshVersion?: number }) {
   const [pendingBusinesses, setPendingBusinesses] = useState<
     {
       id: string;
@@ -4498,6 +4674,7 @@ function AdminApprovalsPage() {
     setProcessingId(null);
   }
   useEffect(() => {
+    let active = true;
     async function loadPendingBusinesses() {
       const { data, error } = await supabase
         .from("profiles")
@@ -4506,9 +4683,11 @@ function AdminApprovalsPage() {
         .eq("approval_status", "pending")
         .order("created_at", { ascending: false });
 
+      if (!active) return;
       if (error) {
         setBusinessError(error.message);
       } else {
+        setBusinessError("");
         setPendingBusinesses(data ?? []);
       }
 
@@ -4516,7 +4695,8 @@ function AdminApprovalsPage() {
     }
 
     void loadPendingBusinesses();
-  }, []);
+    return () => { active = false; };
+  }, [refreshVersion]);
   return (
     <div className="space-y-6">
       <div>

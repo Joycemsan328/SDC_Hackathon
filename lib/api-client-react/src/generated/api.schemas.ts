@@ -5,48 +5,65 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
+export type BusinessFirstGenerationResultPersistence = typeof BusinessFirstGenerationResultPersistence[keyof typeof BusinessFirstGenerationResultPersistence];
+
+
+export const BusinessFirstGenerationResultPersistence = {
+  created: 'created',
+  existing: 'existing',
+} as const;
+
+export type BusinessFirstGenerationResultWorkflowState = typeof BusinessFirstGenerationResultWorkflowState[keyof typeof BusinessFirstGenerationResultWorkflowState];
+
+
+export const BusinessFirstGenerationResultWorkflowState = {
+  business_review: 'business_review',
+  released: 'released',
+  selected: 'selected',
+  confirmed: 'confirmed',
+  changes_requested: 'changes_requested',
+} as const;
+
+export interface BusinessFirstGenerationResult {
+  requestId: string;
+  /** @minimum 1 */
+  revision: number;
+  persistence: BusinessFirstGenerationResultPersistence;
+  workflowState: BusinessFirstGenerationResultWorkflowState;
+}
+
 export interface PersistedProposalRequest {
   requestId: string;
+}
+
+export interface BusinessRevisionRequest {
+  responseId: string;
+}
+
+export type BusinessRevisionResultPersistence = typeof BusinessRevisionResultPersistence[keyof typeof BusinessRevisionResultPersistence];
+
+
+export const BusinessRevisionResultPersistence = {
+  created: 'created',
+  existing: 'existing',
+} as const;
+
+export type BusinessRevisionResultWorkflowState = typeof BusinessRevisionResultWorkflowState[keyof typeof BusinessRevisionResultWorkflowState];
+
+
+export const BusinessRevisionResultWorkflowState = {
+  business_review: 'business_review',
+} as const;
+
+export interface BusinessRevisionResult {
+  requestId: string;
+  /** @pattern ^[1-9][0-9]{0,31}$ */
+  revision: string;
+  persistence: BusinessRevisionResultPersistence;
+  workflowState: BusinessRevisionResultWorkflowState;
 }
 
 export interface HealthStatus {
   status: string;
 }
-
-export type GeneratePersistedProposalPair200Persistence = typeof GeneratePersistedProposalPair200Persistence[keyof typeof GeneratePersistedProposalPair200Persistence];
-
-
-export const GeneratePersistedProposalPair200Persistence = {
-  created: 'created',
-  existing: 'existing',
-} as const;
-
-export type GeneratePersistedProposalPair200ProposalsItemPlanKey = typeof GeneratePersistedProposalPair200ProposalsItemPlanKey[keyof typeof GeneratePersistedProposalPair200ProposalsItemPlanKey];
-
-
-export const GeneratePersistedProposalPair200ProposalsItemPlanKey = {
-  A: 'A',
-  B: 'B',
-} as const;
-
-export type GeneratePersistedProposalPair200ProposalsItemPlanContent = { [key: string]: unknown };
-
-export type GeneratePersistedProposalPair200ProposalsItem = {
-  proposal_id: string;
-  plan_key: GeneratePersistedProposalPair200ProposalsItemPlanKey;
-  status: string;
-  recommendation: string;
-  plan_content: GeneratePersistedProposalPair200ProposalsItemPlanContent;
-};
-
-export type GeneratePersistedProposalPair200 = {
-  requestId: string;
-  revision: number;
-  persistence: GeneratePersistedProposalPair200Persistence;
-  /**
-     * @minItems 2
-     * @maxItems 2
-     */
-  proposals: GeneratePersistedProposalPair200ProposalsItem[];
-};
 

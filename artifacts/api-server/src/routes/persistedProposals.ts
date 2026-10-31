@@ -4,6 +4,7 @@ import { logger } from "../lib/logger";
 import { CustomerDataAccessError, mapSavedRequestToProposalInput, SupabaseCustomerRequestGateway, type CustomerRequestGateway, type CustomerRequestRow } from "../services/customerSupabase";
 import { createCustomerProposalRepository, createSupabaseAdminProposalRepository, INITIAL_PROPOSAL_REVISION, mapProposalMetadata, ProposalPersistenceError, type ProposalMetadataMapper, type ProposalPairRepository } from "../services/proposalPersistence";
 import { ProposalGenerationError, GeneratedProposalSchema, ProposalRequestSchema, proposalGenerator, type ProposalRequest } from "../services/proposalGenerator";
+import { createSubmissionGenerationRouter } from "./submissionGeneration";
 
 const BodySchema = z.object({ requestId: z.string().uuid() }).strict();
 type Generator = Pick<typeof proposalGenerator, "generate">;
@@ -100,4 +101,6 @@ export function createPersistedProposalRouter(dependencies: RouterDependencies =
   return router;
 }
 
-export default createPersistedProposalRouter();
+// The old factory remains only for regression tests of legacy behavior.
+// It is deliberately NOT mounted: customers must never persist/receive drafts.
+export default createSubmissionGenerationRouter();

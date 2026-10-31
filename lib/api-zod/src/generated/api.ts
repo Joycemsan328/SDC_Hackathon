@@ -9,28 +9,38 @@ import * as zod from 'zod';
 
 
 /**
- * @summary Generate and persist an initial saved Plan A/B pair, or return the existing pair
+ * @summary Generate the queued Customer revision for Business review
+ */
+export const GenerateBusinessCustomerRevisionBody = zod.object({
+  "responseId": zod.string().uuid()
+})
+
+export const generateBusinessCustomerRevisionResponseRevisionRegExp = new RegExp('^[1-9][0-9]{0,31}$');
+
+
+export const GenerateBusinessCustomerRevisionResponse = zod.object({
+  "requestId": zod.string().uuid(),
+  "revision": zod.string().regex(generateBusinessCustomerRevisionResponseRevisionRegExp),
+  "persistence": zod.enum(['created', 'existing']),
+  "workflowState": zod.enum(['business_review'])
+})
+
+
+/**
+ * @summary Generate the queued revision for Business review; never return unreleased content
  */
 export const GeneratePersistedProposalPairBody = zod.object({
   "requestId": zod.string().uuid()
 })
 
-export const generatePersistedProposalPairResponseProposalsMin = 2;
-export const generatePersistedProposalPairResponseProposalsMax = 2;
 
 
 
 export const GeneratePersistedProposalPairResponse = zod.object({
   "requestId": zod.string().uuid(),
-  "revision": zod.number().int(),
+  "revision": zod.number().int().min(1),
   "persistence": zod.enum(['created', 'existing']),
-  "proposals": zod.array(zod.object({
-  "proposal_id": zod.string().uuid(),
-  "plan_key": zod.enum(['A', 'B']),
-  "status": zod.string(),
-  "recommendation": zod.string(),
-  "plan_content": zod.record(zod.string(), zod.unknown())
-})).min(generatePersistedProposalPairResponseProposalsMin).max(generatePersistedProposalPairResponseProposalsMax)
+  "workflowState": zod.enum(['business_review', 'released', 'selected', 'confirmed', 'changes_requested'])
 })
 
 

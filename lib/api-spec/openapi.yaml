@@ -10,11 +10,47 @@ servers:
 tags:
   - name: health
     description: Health operations
+  - name: business
+    description: Business operations
 paths:
+  /business/revisions/generate:
+    post:
+      operationId: generateBusinessCustomerRevision
+      tags: [business]
+      summary: Generate the queued Customer revision for Business review
+      security:
+        - businessBearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BusinessRevisionRequest"
+      responses:
+        "200":
+          description: Revision pair saved for Business review; proposal content is not returned
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BusinessRevisionResult"
+        "400":
+          description: Invalid saved Customer response ID
+        "401":
+          description: A valid authenticated Business session is required
+        "403":
+          description: Only approved Business staff may start revision generation
+        "409":
+          description: Revision already running, failed, or cannot be safely resumed
+        "422":
+          description: Saved request or change feedback cannot be used safely
+        "429":
+          description: Shared finite AI generation budget is exhausted
+        "503":
+          description: Migration, quota, Supabase, or RunPod is unavailable
   /proposals/generate-persisted:
     post:
       operationId: generatePersistedProposalPair
-      summary: Generate and persist an initial saved Plan A/B pair, or return the existing pair
+      summary: Generate the queued revision for Business review; never return unreleased content
       security:
         - customerBearer: []
       requestBody:
@@ -25,42 +61,11 @@ paths:
               $ref: "#/components/schemas/PersistedProposalRequest"
       responses:
         "200":
-          description: Canonical saved pair, never unsaved AI output
+          description: Saved workflow metadata only; drafts are private to Business
           content:
             application/json:
               schema:
-                type: object
-                required: [requestId, revision, persistence, proposals]
-                properties:
-                  requestId:
-                    type: string
-                    format: uuid
-                  revision:
-                    type: integer
-                  persistence:
-                    type: string
-                    enum: [created, existing]
-                  proposals:
-                    type: array
-                    minItems: 2
-                    maxItems: 2
-                    items:
-                      type: object
-                      required: [proposal_id, plan_key, status, recommendation, plan_content]
-                      properties:
-                        proposal_id:
-                          type: string
-                          format: uuid
-                        plan_key:
-                          type: string
-                          enum: [A, B]
-                        status:
-                          type: string
-                        recommendation:
-                          type: string
-                        plan_content:
-                          type: object
-                          additionalProperties: true
+                $ref: "#/components/schemas/BusinessFirstGenerationResult"
         "400":
           description: Invalid saved request ID
         "401":
@@ -91,7 +96,27 @@ components:
     customerBearer:
       type: http
       scheme: bearer
+    businessBearer:
+      type: http
+      scheme: bearer
   schemas:
+    BusinessFirstGenerationResult:
+      type: object
+      additionalProperties: false
+      required: [requestId, revision, persistence, workflowState]
+      properties:
+        requestId:
+          type: string
+          format: uuid
+        revision:
+          type: integer
+          minimum: 1
+        persistence:
+          type: string
+          enum: [created, existing]
+        workflowState:
+          type: string
+          enum: [business_review, released, selected, confirmed, changes_requested]
     PersistedProposalRequest:
       type: object
       additionalProperties: false
@@ -100,6 +125,31 @@ components:
         requestId:
           type: string
           format: uuid
+    BusinessRevisionRequest:
+      type: object
+      additionalProperties: false
+      required: [responseId]
+      properties:
+        responseId:
+          type: string
+          format: uuid
+    BusinessRevisionResult:
+      type: object
+      additionalProperties: false
+      required: [requestId, revision, persistence, workflowState]
+      properties:
+        requestId:
+          type: string
+          format: uuid
+        revision:
+          type: string
+          pattern: "^[1-9][0-9]{0,31}$"
+        persistence:
+          type: string
+          enum: [created, existing]
+        workflowState:
+          type: string
+          enum: [business_review]
     HealthStatus:
       type: object
       properties:

@@ -6,10 +6,12 @@
  * OpenAPI spec version: 0.1.0
  */
 
-export * from './generatePersistedProposalPair200';
-export * from './generatePersistedProposalPair200Persistence';
-export * from './generatePersistedProposalPair200ProposalsItem';
-export * from './generatePersistedProposalPair200ProposalsItemPlanContent';
-export * from './generatePersistedProposalPair200ProposalsItemPlanKey';
+export * from './businessFirstGenerationResult';
+export * from './businessFirstGenerationResultPersistence';
+export * from './businessFirstGenerationResultWorkflowState';
+export * from './businessRevisionRequest';
+export * from './businessRevisionResult';
+export * from './businessRevisionResultPersistence';
+export * from './businessRevisionResultWorkflowState';
 export * from './healthStatus';
 export * from './persistedProposalRequest';

@@ -20,7 +20,9 @@ import type {
 } from '@tanstack/react-query';
 
 import type {
-  GeneratePersistedProposalPair200,
+  BusinessFirstGenerationResult,
+  BusinessRevisionRequest,
+  BusinessRevisionResult,
   HealthStatus,
   PersistedProposalRequest
 } from './api.schemas';
@@ -52,18 +54,18 @@ const withQueryKey = <T extends object, K>(query: T, queryKey: K): T & { queryKe
   return result;
 };
 
-export const getGeneratePersistedProposalPairUrl = () => {
+export const getGenerateBusinessCustomerRevisionUrl = () => {
 
 
 
 
-  return `/api/proposals/generate-persisted`
+  return `/api/business/revisions/generate`
 }
 
 /**
- * @summary Generate and persist an initial saved Plan A/B pair, or return the existing pair
+ * @summary Generate the queued Customer revision for Business review
  */
-export const generatePersistedProposalPair = async (persistedProposalRequest: PersistedProposalRequest, options?: Parameters<typeof customFetch>[1]): Promise<GeneratePersistedProposalPair200> => {
+export const generateBusinessCustomerRevision = async (businessRevisionRequest: BusinessRevisionRequest, options?: Parameters<typeof customFetch>[1]): Promise<BusinessRevisionResult> => {
 
     const getHeaders = (h?: NonNullable<RequestInit['headers']>): Record<string, string | readonly string[]> => {
     if (!h) return {};
@@ -79,7 +81,95 @@ export const generatePersistedProposalPair = async (persistedProposalRequest: Pe
     }
     return headers;
   };
-return customFetch<GeneratePersistedProposalPair200>(getGeneratePersistedProposalPairUrl(),
+return customFetch<BusinessRevisionResult>(getGenerateBusinessCustomerRevisionUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getHeaders(options?.headers) },
+    body: JSON.stringify(businessRevisionRequest)
+  }
+);}
+
+
+
+
+
+export const getGenerateBusinessCustomerRevisionMutationKey = () => ['generateBusinessCustomerRevision'] as const;
+
+export const getGenerateBusinessCustomerRevisionMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof generateBusinessCustomerRevision>>, TError,GenerateBusinessCustomerRevisionMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof generateBusinessCustomerRevision>>, TError,GenerateBusinessCustomerRevisionMutationVariables, TContext> => {
+
+const mutationKey = getGenerateBusinessCustomerRevisionMutationKey();
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof generateBusinessCustomerRevision>>, GenerateBusinessCustomerRevisionMutationVariables> = (props) => {
+          const {data} = props ?? {};
+
+          return  generateBusinessCustomerRevision(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type GenerateBusinessCustomerRevisionMutationResult = NonNullable<Awaited<ReturnType<typeof generateBusinessCustomerRevision>>>
+    export type GenerateBusinessCustomerRevisionMutationBody = BodyType<BusinessRevisionRequest>
+    export type GenerateBusinessCustomerRevisionMutationError = ErrorType<void>
+    export type GenerateBusinessCustomerRevisionMutationVariables = {data: BodyType<BusinessRevisionRequest>}
+
+    /**
+ * @summary Generate the queued Customer revision for Business review
+ */
+export const useGenerateBusinessCustomerRevision = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof generateBusinessCustomerRevision>>, TError,GenerateBusinessCustomerRevisionMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof generateBusinessCustomerRevision>>,
+        TError,
+        GenerateBusinessCustomerRevisionMutationVariables,
+        TContext
+      > => {
+      return useMutation(getGenerateBusinessCustomerRevisionMutationOptions(options));
+    }
+
+export const getGeneratePersistedProposalPairUrl = () => {
+
+
+
+
+  return `/api/proposals/generate-persisted`
+}
+
+/**
+ * @summary Generate the queued revision for Business review; never return unreleased content
+ */
+export const generatePersistedProposalPair = async (persistedProposalRequest: PersistedProposalRequest, options?: Parameters<typeof customFetch>[1]): Promise<BusinessFirstGenerationResult> => {
+
+    const getHeaders = (h?: NonNullable<RequestInit['headers']>): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(h as Iterable<Iterable<string>>, (entry) => Array.from(entry) as [string, string]),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+return customFetch<BusinessFirstGenerationResult>(getGeneratePersistedProposalPairUrl(),
   {
     ...options,
     method: 'POST',
@@ -127,7 +217,7 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
     export type GeneratePersistedProposalPairMutationVariables = {data: BodyType<PersistedProposalRequest>}
 
     /**
- * @summary Generate and persist an initial saved Plan A/B pair, or return the existing pair
+ * @summary Generate the queued revision for Business review; never return unreleased content
  */
 export const useGeneratePersistedProposalPair = <TError = ErrorType<void>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof generatePersistedProposalPair>>, TError,GeneratePersistedProposalPairMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}

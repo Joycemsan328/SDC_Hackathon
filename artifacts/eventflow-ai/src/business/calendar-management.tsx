@@ -1,13 +1,19 @@
 import { useState } from 'react';
 import { CheckCircle2, ChevronLeft, ChevronRight, Plus, ShieldBan, Trash2 } from 'lucide-react';
+import EventDataStatus from './EventDataStatus';
+import type { EventItem } from './events';
 
 type CalendarManagementProps = {
   store: {
-    events: Array<{ id: string; name: string; customer: string; date: string; time: string; status: string; guests: number; value: number }>;
+    events: EventItem[];
     blockedSlots?: Array<{ id: string; date: string; reason: string }>;
   };
   openModal: (modal: { kind: 'event' | 'block'; item?: { date: string } }) => void;
   unblockSlot: (id: string) => void;
+  eventFetchState: 'idle' | 'loading' | 'loaded' | 'error';
+  eventFetchError: string;
+  venueNamesUnavailable?: boolean;
+  allowLocalEventCreation?: boolean;
 };
 
 const localDate = (date: Date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
@@ -15,7 +21,15 @@ const labelDate = (date: string, options: Intl.DateTimeFormatOptions = { day: 'n
   new Date(`${date}T12:00:00`).toLocaleDateString('en-MY', options);
 const money = (value: number) => `RM ${value.toLocaleString('en-MY')}`;
 
-export default function CalendarManagementPage({ store, openModal, unblockSlot }: CalendarManagementProps) {
+export default function CalendarManagementPage({
+  store,
+  openModal,
+  unblockSlot,
+  eventFetchState,
+  eventFetchError,
+  venueNamesUnavailable = false,
+  allowLocalEventCreation = false,
+}: CalendarManagementProps) {
   const now = new Date();
   const today = localDate(now);
   const [view, setView] = useState<'Month' | 'Week' | 'Day'>('Month');
@@ -66,7 +80,7 @@ export default function CalendarManagementPage({ store, openModal, unblockSlot }
         <div className="mt-1 space-y-1">
           {block && <div className="truncate rounded bg-[#f4e3e9] px-1 py-1 text-[8px] font-bold text-[#9a536f] sm:text-[9px]">Blocked</div>}
           {items.slice(0, block ? 1 : 2).map((event) => (
-            <div key={event.id} className="truncate rounded bg-[#fdf1d2] px-1 py-1 text-[8px] font-semibold text-[#8d7130] sm:text-[9px]">{event.name}</div>
+            <div key={event.id} className={`truncate rounded px-1 py-1 text-[8px] font-semibold sm:text-[9px] ${event.status === 'Confirmed' ? 'bg-[#f7e6ef] text-[#9e537b]' : 'bg-[#fdf1d2] text-[#8d7130]'}`}>{event.source === 'demo' ? 'Demo · ' : ''}{event.name}</div>
           ))}
           {items.length > (block ? 1 : 2) && <p className="text-[8px] text-[#827588]">+{items.length - (block ? 1 : 2)} more</p>}
         </div>
@@ -84,6 +98,12 @@ export default function CalendarManagementPage({ store, openModal, unblockSlot }
 
   return (
     <div className="fade-in">
+      <EventDataStatus
+        state={eventFetchState}
+        error={eventFetchError}
+        eventCount={store.events.filter((event) => event.source === 'supabase').length}
+        venueNamesUnavailable={venueNamesUnavailable}
+      />
       <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <div className="mb-2 text-[10px] font-bold uppercase tracking-[.2em] text-[#a987a9]">Plan with confidence</div>
@@ -91,7 +111,7 @@ export default function CalendarManagementPage({ store, openModal, unblockSlot }
           <p className="mt-2 max-w-2xl text-[13px] leading-relaxed text-[#827889]">See reserved events and block dates when your studio is unavailable.</p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <button type="button" onClick={() => openForSelectedDate('event')} className="inline-flex min-h-9 items-center gap-2 rounded-xl bg-[#bd7294] px-3.5 py-2 text-[12px] font-bold text-white shadow-sm hover:bg-[#a95f81]" data-testid="button-calendar-create-event"><Plus size={14}/> Create event</button>
+          <button type="button" disabled={!allowLocalEventCreation} title={!allowLocalEventCreation ? 'Supabase event creation will be available in Phase 3B.' : undefined} onClick={() => openForSelectedDate('event')} className="inline-flex min-h-9 items-center gap-2 rounded-xl bg-[#bd7294] px-3.5 py-2 text-[12px] font-bold text-white shadow-sm hover:bg-[#a95f81] disabled:cursor-not-allowed disabled:opacity-50" data-testid="button-calendar-create-event"><Plus size={14}/> Create event</button>
           {!selectedBlock && selectedEvents.length === 0 && <button type="button" onClick={() => openForSelectedDate('block')} className="inline-flex min-h-9 items-center gap-2 rounded-xl border border-[#e7dce9] bg-white px-3.5 py-2 text-[12px] font-bold text-[#66566e] hover:bg-[#faf6fb]" data-testid="button-calendar-block-date"><ShieldBan size={14}/> Block date</button>}
           <div className="flex rounded-xl border border-[#eee7ef] bg-white p-1">
             {(['Month', 'Week', 'Day'] as const).map((mode) => (
@@ -104,6 +124,7 @@ export default function CalendarManagementPage({ store, openModal, unblockSlot }
       <div className="mb-4 flex flex-wrap gap-3 text-[10px] font-semibold text-[#827987]">
         <span className="flex items-center gap-1.5"><i className="h-2.5 w-2.5 rounded-full bg-[#83b598]"/>Available</span>
         <span className="flex items-center gap-1.5"><i className="h-2.5 w-2.5 rounded-full bg-[#e7c96f]"/>Reserved</span>
+        <span className="flex items-center gap-1.5"><i className="h-2.5 w-2.5 rounded-full bg-[#bd7294]"/>Confirmed</span>
         <span className="flex items-center gap-1.5"><i className="h-2.5 w-2.5 rounded-full bg-[#d77d82]"/>Blocked</span>
       </div>
 
@@ -150,7 +171,7 @@ export default function CalendarManagementPage({ store, openModal, unblockSlot }
                   <span className="text-[9px] font-bold uppercase text-[#9b8fa0]">{labelDate(date, { weekday: 'short' })}</span>
                   <span className="ml-2 text-[12px] font-bold">{labelDate(date, { day: 'numeric', month: 'short' })}</span>
                   {dayBlock(date) && <div className="mt-2 rounded-md bg-[#f4e3e9] px-2 py-1 text-[9px] font-semibold text-[#9a536f]">Blocked · {dayBlock(date)?.reason}</div>}
-                  {dayEvents(date).map((event) => <div key={event.id} className="mt-2 rounded-md bg-[#fdf1d2] px-2 py-1 text-[9px] text-[#8d7130]">{event.time} · {event.name}</div>)}
+                  {dayEvents(date).map((event) => <div key={event.id} className={`mt-2 rounded-md px-2 py-1 text-[9px] ${event.status === 'Confirmed' ? 'bg-[#f7e6ef] text-[#9e537b]' : 'bg-[#fdf1d2] text-[#8d7130]'}`}>{event.time} · {event.source === 'demo' ? 'Demo · ' : ''}{event.name}</div>)}
                 </button>
               ))}
             </div>
@@ -170,31 +191,42 @@ export default function CalendarManagementPage({ store, openModal, unblockSlot }
             </div>
           ) : selectedEvents.length === 0 ? (
             <div className="rounded-xl bg-[#f4f8f5] p-4">
-              <div className="flex items-center gap-2 text-[#5c896b]"><CheckCircle2 size={16}/><span className="text-[12px] font-bold">Available to book</span></div>
-              <p className="mt-2 text-[10px] leading-relaxed text-[#7d8f80]">No events or blocks are saved for this date.</p>
+              <div className={`flex items-center gap-2 ${eventFetchState === 'error' ? 'text-[#a34e58]' : 'text-[#5c896b]'}`}>
+                <CheckCircle2 size={16}/>
+                <span className="text-[12px] font-bold">
+                  {eventFetchState === 'loaded' ? 'No saved Events on this date' : eventFetchState === 'error' ? 'Live availability could not be verified' : 'Checking saved Events'}
+                </span>
+              </div>
+              <p className="mt-2 text-[10px] leading-relaxed text-[#7d8f80]">
+                {eventFetchState === 'loaded'
+                  ? 'Venue and time conflicts are checked when a booking is confirmed.'
+                  : 'Wait for the live Event check before relying on this date.'}
+              </p>
             </div>
           ) : null}
           {selectedEvents.map((event) => (
             <div key={event.id} className="mb-3 rounded-xl border border-[#f0eaf1] p-3" data-testid={`calendar-event-${event.id}`}>
-              <div className="flex items-center justify-between gap-2"><b className="text-[12px]">{event.name}</b><span className="rounded-full bg-[#fdf1d2] px-2 py-1 text-[9px] font-bold text-[#8d7130]">{event.status}</span></div>
-              <p className="mt-2 text-[10px] text-[#8d8291]">{event.customer} · {event.time} · {event.guests} guests</p>
+              <div className="flex items-center justify-between gap-2"><b className="text-[12px]">{event.name}</b><span className={`rounded-full px-2 py-1 text-[9px] font-bold ${event.status === 'Confirmed' ? 'bg-[#f7e6ef] text-[#9e537b]' : 'bg-[#fdf1d2] text-[#8d7130]'}`}>{event.status}</span></div>
+                <p className="mt-2 text-[10px] text-[#8d8291]">{event.customer} · {event.time}{event.endTime ? `–${event.endTime}` : ''} · {event.guests == null ? 'Guest count not set' : `${event.guests} guests`}</p>
+                {event.venueId && <p className="mt-1 text-[10px] text-[#8d8291]">{event.venueName || 'Venue booking'}</p>}
+                {event.source === 'demo' && <p className="mt-1 text-[9px] font-semibold text-[#827588]">Demo event</p>}
               <p className="mt-2 text-[10px] font-semibold text-[#76657e]">{money(event.value)}</p>
             </div>
           ))}
           {selectedEvents.length > 0 && !selectedBlock && <p className="mb-3 text-[10px] text-[#918695]">This date has an event, so a full-day block cannot be added.</p>}
           <div className="mt-4 flex flex-wrap gap-2 border-t border-[#f0ebf1] pt-4">
-            <button type="button" onClick={() => openForSelectedDate('event')} className="inline-flex items-center gap-1.5 rounded-lg bg-[#bd7294] px-3 py-2 text-[10px] font-bold text-white hover:bg-[#a95f81]" data-testid="button-date-create-event"><Plus size={13}/> Create event</button>
+            <button type="button" disabled={!allowLocalEventCreation} title={!allowLocalEventCreation ? 'Supabase event creation will be available in Phase 3B.' : undefined} onClick={() => openForSelectedDate('event')} className="inline-flex items-center gap-1.5 rounded-lg bg-[#bd7294] px-3 py-2 text-[10px] font-bold text-white hover:bg-[#a95f81] disabled:cursor-not-allowed disabled:opacity-50" data-testid="button-date-create-event"><Plus size={13}/> Create event</button>
             {!selectedBlock && selectedEvents.length === 0 && <button type="button" onClick={() => openForSelectedDate('block')} className="inline-flex items-center gap-1.5 rounded-lg border border-[#e7dce9] bg-white px-3 py-2 text-[10px] font-bold text-[#66566e] hover:bg-[#faf6fb]" data-testid="button-date-block"><ShieldBan size={13}/> Block date</button>}
           </div>
           <div className="mt-5 border-t border-[#f0ebf1] pt-4">
             <h3 className="mb-2 text-[11px] font-bold">Next reserved dates</h3>
-            {[...events.map((event) => ({ date: event.date, label: event.name, id: event.id })), ...blocks.map((block) => ({ date: block.date, label: `Blocked · ${block.reason}`, id: block.id }))]
+            {[...events.map((event) => ({ date: event.date, label: event.name, id: event.id, source: event.source })), ...blocks.map((block) => ({ date: block.date, label: `Blocked · ${block.reason}`, id: block.id, source: undefined }))]
               .filter((item) => item.date >= today)
               .sort((a, b) => a.date.localeCompare(b.date))
               .slice(0, 5)
               .map((item) => (
                 <button key={item.id} type="button" onClick={() => setCalendarDate(item.date)} className="flex w-full items-center justify-between border-b border-[#f5f0f5] py-2 text-left" data-testid={`button-upcoming-date-${item.id}`}>
-                  <span className="truncate pr-2 text-[10px] font-semibold">{labelDate(item.date, { day: 'numeric', month: 'short' })} · {item.label}</span><ChevronRight size={13} className="shrink-0 text-[#a99eae]"/>
+                  <span className="truncate pr-2 text-[10px] font-semibold">{labelDate(item.date, { day: 'numeric', month: 'short' })} · {item.source === 'demo' ? 'Demo · ' : ''}{item.label}</span><ChevronRight size={13} className="shrink-0 text-[#a99eae]"/>
                 </button>
               ))}
           </div>

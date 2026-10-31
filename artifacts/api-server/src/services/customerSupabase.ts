@@ -37,6 +37,25 @@ export class CustomerDataAccessError extends Error {
   }
 }
 
+const supportedEventAreas: Record<string, ReadonlySet<string>> = {
+  "kuala lumpur": new Set([
+    "bangsar", "bukit bintang", "bukit jalil", "cheras", "klcc",
+    "mont kiara", "setapak", "sri hartamas", "titiwangsa", "wangsa maju",
+  ]),
+  selangor: new Set([
+    "cyberjaya", "kajang", "klang", "petaling jaya", "puchong",
+    "rawang", "shah alam", "selayang", "sepang", "subang jaya",
+  ]),
+};
+
+export function isSupportedEventLocation(location: string): boolean {
+  const parts = location.split(",").map(part => part.trim().toLocaleLowerCase());
+  if (parts.length < 2) return false;
+  const region = parts.at(-1) ?? "";
+  const area = parts.at(-2) ?? "";
+  return supportedEventAreas[region]?.has(area) ?? false;
+}
+
 function parseError(status: number): CustomerDataAccessError {
   if (status === 401) return new CustomerDataAccessError("INVALID_ACCESS_TOKEN", 401, "Your session is invalid or expired.");
   if (status === 403) return new CustomerDataAccessError("CUSTOMER_ACCESS_DENIED", 403, "This account cannot generate customer proposals.");
@@ -140,7 +159,6 @@ export function mapSavedRequestToProposalInput(request: CustomerRequestRow): Pro
   if (!location) {
     throw new CustomerDataAccessError("REQUEST_LOCATION_NOT_PERSISTED", 422, "The saved request is missing a usable event location.");
   }
-
   const noteBody = locationNotes?.[2]?.trim() ?? "";
   const versionedMetadata = /^EventFlow request metadata v1:\r?\nTheme:\s*([^\r\n]*)(?:\r?\n\r?\n([\s\S]*))?$/.exec(noteBody);
   const theme = versionedMetadata?.[1]?.trim() ?? "";
