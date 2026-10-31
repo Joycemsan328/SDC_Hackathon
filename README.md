@@ -20,21 +20,22 @@
 
 ---
 
-##  Links
+## Links
 
 | Resource | Link |
 |---|---|
 | **GitHub Repository** | https://github.com/Joycemsan328/SDC_Hackathon.git |
-| **Replit Project** | - |
+| **Replit Project** | https://event-flow-ai-customer-portal.replit.app/login |
 | **Live Demo** | https://drive.google.com/file/d/1Yh9t2PCvNx3yux0EqMu1KWfe2Omhc_FL/view?usp=drive_link |
-| **RunPod Endpoint** | POST https://api.runpod.ai/v2/v14dit7fdqpt7v/runsync \ |
+| **RunPod Endpoint** | `POST https://api.runpod.ai/v2/v14dit7fdqpt7v/runsync` |
 | **Slide Deck** | https://sg.docworkspace.com/d/sbQa3vWngAZ6nqFB_z4hmbox2rklizgpyf8?sa=601.1037 |
 | **Demo Video** | https://youtu.be/XwEgB-vO9SI |
+| **Product Requirements Document (PRD)** | [View PRD](./EventFlow%20AI%20PRD.pdf) |
+
 ---
 ## Demo Access & Login Instructions
 
 **Live website:** https://event-flow-ai-customer-portal.replit.app/login
-**To view the slide deck, save the PPTX file before opening**
 
 For hackathon evaluation, please use the team's existing demonstration accounts. **Newly registered Business accounts require approval from a Business Administrator before they can access the Business Portal.** Therefore, registering a new Business account may not provide immediate access during judging.
 
