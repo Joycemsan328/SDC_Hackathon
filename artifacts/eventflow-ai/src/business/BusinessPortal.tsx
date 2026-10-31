@@ -18,6 +18,7 @@ import { readBusinessEvents, type EventItem } from "./events";
 import { useUnifiedAuth } from "@/auth/UnifiedAuth";
 import {
   Route,
+  Redirect,
   Switch,
   useLocation,
   Link,
@@ -48,7 +49,6 @@ import {
   Mail,
   Menu,
   MoreHorizontal,
-  Package,
   Plus,
   Search,
   Send,
@@ -309,7 +309,7 @@ type Supplier = {
   contact: string;
 };
 type Modal = {
-  kind: "request" | "supplier" | "event" | "block" | "proposal" | "notice";
+  kind: "request" | "event" | "block" | "proposal" | "notice";
   item?: any;
 } | null;
 
@@ -603,7 +603,6 @@ const nav = [
   { href: "/approvals", label: "Approvals", icon: ClipboardCheck },
   { href: "/events", label: "Events", icon: CalendarCheck },
   { href: "/calendar", label: "Availability", icon: CalendarDays },
-  { href: "/suppliers", label: "Suppliers", icon: Package },
   { href: "/reports", label: "Reports", icon: ChartNoAxesCombined },
   {
     href: "/admin-approvals",
@@ -1056,16 +1055,6 @@ function App() {
     flash("Request added to your workspace");
     return true;
   };
-  const addSupplier = (v: Supplier) => {
-    setStore((s) => ({
-      ...s,
-      suppliers: v.id
-        ? s.suppliers.map((x) => (x.id === v.id ? v : x))
-        : [v, ...s.suppliers],
-    }));
-    setModal(null);
-    flash("Supplier details saved");
-  };
   const createProposal = (r: Req) => {
     if (r.source === "supabase") {
       flash("Proposal actions are unavailable from this saved request.");
@@ -1511,11 +1500,7 @@ const approveProposal = async (p: Proposal): Promise<boolean> => {
                         />
                     </Route>
                     <Route path="/suppliers">
-                        <Suppliers
-                          store={store}
-                          openModal={setModal}
-                          setStore={setStore}
-                        />
+                      <Redirect to="/" />
                     </Route>
                     <Route path="/reports">
                       <Reports store={store} />
@@ -1562,13 +1547,6 @@ const approveProposal = async (p: Proposal): Promise<boolean> => {
                 onClose={() => setModal(null)}
                 onSave={addBlockedSlot}
                 existingIds={store.blockedSlots.map((item) => item.id)}
-              />
-            )}
-            {modal?.kind === "supplier" && (
-              <SupplierModal
-                supplier={modal.item}
-                onClose={() => setModal(null)}
-                onSave={addSupplier}
               />
             )}
             {modal?.kind === "notice" && (
@@ -2013,12 +1991,6 @@ function Dashboard({ store, setLocation, openModal, requestFetchState, recentlyU
                 icon={CalendarDays}
                 label="Check dates"
                 test="quick-calendar"
-              />
-              <Quick
-                onClick={() => setLocation("/suppliers")}
-                icon={Package}
-                label="Find supplier"
-                test="quick-supplier"
               />
             </div>
           </Panel>
@@ -3674,141 +3646,6 @@ function Legend({ color, label }: any) {
     </div>
   );
 }
-function Suppliers({ store, openModal, setStore }: any) {
-  const [search, setSearch] = useState("");
-  const [category, setCategory] = useState("All");
-  const categories = [
-    "All",
-    "Catering",
-    "Decoration",
-    "Photography",
-    "Entertainment",
-    "Equipment",
-    "Transport",
-  ];
-  const list = store.suppliers.filter(
-    (s: Supplier) =>
-      (category === "All" || s.category === category) &&
-      `${s.name} ${s.package} ${s.category}`
-        .toLowerCase()
-        .includes(search.toLowerCase()),
-  );
-  return (
-    <div className="fade-in">
-      <PageHeading
-        eyebrow="Sample listings"
-        title="Supplier catalogue"
-        subtitle="Sample supplier data; these listings are not verified partners."
-        action={
-          <Button
-            onClick={() => openModal({ kind: "supplier" })}
-            testid="button-add-supplier"
-          >
-            <Plus size={15} /> Add supplier
-          </Button>
-        }
-      />
-      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="relative max-w-sm flex-1">
-          <Search
-            size={14}
-            className="absolute left-3 top-1/2 -translate-y-1/2 text-[#a69baa]"
-          />
-          <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search suppliers..."
-            className="h-10 w-full rounded-xl border border-[#eee7ef] bg-white pl-9 text-[12px]"
-            data-testid="input-search-suppliers"
-          />
-        </div>
-        <select
-          value={category}
-          onChange={(e) => setCategory(e.target.value)}
-          className="h-10 rounded-xl border border-[#eee7ef] bg-white px-3 text-[11px]"
-          data-testid="select-supplier-category"
-        >
-          {categories.map((c) => (
-            <option key={c}>{c}</option>
-          ))}
-        </select>
-      </div>
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-        {list.map((s: Supplier, i: number) => (
-          <SupplierCard key={s.id} supplier={s} i={i} openModal={openModal} />
-        ))}
-      </div>
-      {!list.length && (
-        <Panel>
-          <Empty
-            title="No suppliers match this search"
-            action={() => setCategory("All")}
-            cta="Clear category"
-          />
-        </Panel>
-      )}
-    </div>
-  );
-}
-function SupplierCard({ supplier: s, i, openModal }: any) {
-  const tones = [
-    "bg-[#f3e8ee] text-[#95677f]",
-    "bg-[#ece8f4] text-[#806d9b]",
-    "bg-[#e8f1ec] text-[#678675]",
-    "bg-[#f4eee1] text-[#9a8050]",
-  ];
-  const Icon = [Heart, Users, Activity, Package, MusicIcon, MapPin][i % 6];
-  return (
-    <Panel
-      className="p-5 transition hover:-translate-y-0.5 hover:shadow-md"
-      data-testid={`card-supplier-${s.id}`}
-    >
-      <div className="flex items-start justify-between">
-        <div
-          className={`grid h-11 w-11 place-items-center rounded-2xl ${tones[i % tones.length]}`}
-        >
-          <Icon size={19} />
-        </div>
-        <Status value={s.status} />
-      </div>
-      <div className="mt-4 text-[9px] font-bold uppercase tracking-[.14em] text-[#a187a6]">
-        {s.category}
-      </div>
-      <h2 className="serif mt-1 text-[19px]">{s.name}</h2>
-      <p className="mt-1 text-[11px] text-[#8d8291]">{s.package}</p>
-      <div className="mt-4 flex items-end justify-between border-t border-[#f1edf1] pt-3">
-        <div>
-          <p className="text-[9px] font-bold uppercase tracking-[.1em] text-[#a49aa8]">
-            From
-          </p>
-          <p className="mt-1 text-[15px] font-bold">{money(s.price)}</p>
-        </div>
-        <div className="flex gap-1">
-          <a
-            href={`mailto:${s.contact}`}
-            className="grid h-8 w-8 place-items-center rounded-lg border border-[#eee7ef] text-[#816b88] hover:bg-[#f7f1f8]"
-            aria-label={`Email ${s.name}`}
-            data-testid={`link-email-supplier-${s.id}`}
-          >
-            <Mail size={14} />
-          </a>
-          <button
-            onClick={() => openModal({ kind: "supplier", item: s })}
-            className="grid h-8 w-8 place-items-center rounded-lg border border-[#eee7ef] text-[#816b88] hover:bg-[#f7f1f8]"
-            aria-label={`Edit ${s.name}`}
-            data-testid={`button-edit-supplier-${s.id}`}
-          >
-            <Edit3 size={14} />
-          </button>
-        </div>
-      </div>
-      <div className="mt-3 text-[10px] text-[#9b919e]">{s.contact}</div>
-    </Panel>
-  );
-}
-function MusicIcon(props: any) {
-  return <Activity {...props} />;
-}
 function Reports({ store }: any) {
   const reqCount = store.requests.length;
   const approved = store.proposals.filter(
@@ -4433,102 +4270,6 @@ function BlockDateModal({ initialDate, onClose, onSave, existingIds }: any) {
           </Button>
           <Button type="submit" testid="button-save-block">
             <ShieldBan size={14} /> Block date
-          </Button>
-        </div>
-      </form>
-    </ModalFrame>
-  );
-}
-function SupplierModal({ supplier, onClose, onSave }: any) {
-  const [f, setF] = useState<any>(
-    supplier || {
-      id: "",
-      name: "",
-      package: "",
-      category: "Catering",
-      price: "",
-      status: "Available",
-      contact: "",
-    },
-  );
-  const set = (k: string, v: any) => setF((s: any) => ({ ...s, [k]: v }));
-  const submit = (e: any) => {
-    e.preventDefault();
-    onSave({
-      ...f,
-      id: f.id || `SUP-${String(Date.now()).slice(-4)}`,
-      price: Number(f.price),
-    });
-  };
-  return (
-    <ModalFrame
-      title={supplier ? "Edit supplier" : "Add a supplier"}
-      subtitle="Keep your trusted creative partners close at hand."
-      close={onClose}
-    >
-      <form onSubmit={submit} className="space-y-4">
-        <Field
-          label="Supplier name"
-          value={f.name}
-          onChange={(e: any) => set("name", e.target.value)}
-          required
-          testid="input-supplier-name"
-        />
-        <Field
-          label="Package or service"
-          value={f.package}
-          onChange={(e: any) => set("package", e.target.value)}
-          required
-          testid="input-supplier-package"
-        />
-        <div className="grid gap-3 sm:grid-cols-2">
-          <Field
-            label="Category"
-            value={f.category}
-            onChange={(e: any) => set("category", e.target.value)}
-            options={[
-              "Catering",
-              "Decoration",
-              "Photography",
-              "Entertainment",
-              "Equipment",
-              "Transport",
-            ]}
-            testid="select-supplier-category-modal"
-          />
-          <Field
-            label="Price (RM)"
-            type="number"
-            value={f.price}
-            onChange={(e: any) => set("price", e.target.value)}
-            required
-            testid="input-supplier-price"
-          />
-          <Field
-            label="Availability"
-            value={f.status}
-            onChange={(e: any) => set("status", e.target.value)}
-            options={["Available", "Limited", "Unavailable"]}
-            testid="select-supplier-status"
-          />
-          <Field
-            label="Contact email"
-            type="email"
-            value={f.contact}
-            onChange={(e: any) => set("contact", e.target.value)}
-            testid="input-supplier-contact"
-          />
-        </div>
-        <div className="flex justify-end gap-2 border-t border-[#f0ebf1] pt-4">
-          <Button
-            variant="outline"
-            onClick={onClose}
-            testid="button-cancel-supplier"
-          >
-            Cancel
-          </Button>
-          <Button type="submit" testid="button-save-supplier">
-            <Check size={14} /> Save supplier
           </Button>
         </div>
       </form>

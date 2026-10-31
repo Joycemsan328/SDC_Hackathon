@@ -58,6 +58,13 @@ test("sidebar excludes demo-only controls while the My Account sign-out remains"
   assert.match(accountText, /data-testid="button-account-sign-out"/);
   assert.match(accountText, /await signOut\(\)/);
 });
+test("Business Portal removes the Suppliers page and redirects its old route", () => {
+  assert.doesNotMatch(text, /href: "\/suppliers"|label: "Suppliers"/);
+  assert.match(text, /<Route path="\/suppliers">\s*<Redirect to="\/" \/>/);
+  assert.doesNotMatch(text, /function Suppliers\(|function SupplierCard\(|function SupplierModal\(/);
+  assert.doesNotMatch(text, /Find supplier|Supplier catalogue|Add supplier|Search suppliers|select-supplier-category/);
+  assert.doesNotMatch(text, /kind === "supplier"|quick-supplier|button-add-supplier/);
+});
 test("all four Dashboard KPI cards are Wouter links to their existing routes", () => {
   const dashboard = findAll(node => ts.isFunctionDeclaration(node) && node.name?.text === "Dashboard")[0];
   assert.ok(dashboard);
