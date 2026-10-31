@@ -1417,8 +1417,6 @@ const approveProposal = async (p: Proposal): Promise<boolean> => {
                           setLocation={setLocation}
                           openModal={setModal}
                           requestFetchState={requestFetchState}
-                          requestFetchError={requestFetchError}
-                          supabaseRequestCount={supabaseRequests.length}
                           recentlyUpdatedRequestCount={countRecentlyUpdatedRequests(supabaseRequests)}
                         />
                     </Route>
@@ -1511,8 +1509,6 @@ const approveProposal = async (p: Proposal): Promise<boolean> => {
                           openModal={setModal}
                           unblockSlot={unblockSlot}
                           eventFetchState={eventFetchState}
-                          eventFetchError={eventFetchError}
-                          venueNamesUnavailable={venueNamesUnavailable}
                           allowLocalEventCreation={false}
                         />
                     </Route>
@@ -1762,7 +1758,7 @@ function RequestFetchNotice({ state, error, count }: {
     </div>
   );
 }
-function Dashboard({ store, setLocation, openModal, requestFetchState, requestFetchError, supabaseRequestCount, recentlyUpdatedRequestCount }: any) {
+function Dashboard({ store, setLocation, openModal, requestFetchState, recentlyUpdatedRequestCount }: any) {
   const pending = store.proposals.filter(
     (p: Proposal) => p.status === "Pending Approval",
   );
@@ -1786,7 +1782,6 @@ function Dashboard({ store, setLocation, openModal, requestFetchState, requestFe
           </Button>
         }
       />
-      <RequestFetchNotice state={requestFetchState} error={requestFetchError} count={supabaseRequestCount} />
       <div className="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Metric
           label="Open requests"

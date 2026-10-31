@@ -1,6 +1,5 @@
 import { useState } from 'react';
 import { CheckCircle2, ChevronLeft, ChevronRight, Plus, ShieldBan, Trash2 } from 'lucide-react';
-import EventDataStatus from './EventDataStatus';
 import type { EventItem } from './events';
 
 type CalendarManagementProps = {
@@ -11,8 +10,6 @@ type CalendarManagementProps = {
   openModal: (modal: { kind: 'event' | 'block'; item?: { date: string } }) => void;
   unblockSlot: (id: string) => void;
   eventFetchState: 'idle' | 'loading' | 'loaded' | 'error';
-  eventFetchError: string;
-  venueNamesUnavailable?: boolean;
   allowLocalEventCreation?: boolean;
 };
 
@@ -26,8 +23,6 @@ export default function CalendarManagementPage({
   openModal,
   unblockSlot,
   eventFetchState,
-  eventFetchError,
-  venueNamesUnavailable = false,
   allowLocalEventCreation = false,
 }: CalendarManagementProps) {
   const now = new Date();
@@ -98,12 +93,6 @@ export default function CalendarManagementPage({
 
   return (
     <div className="fade-in">
-      <EventDataStatus
-        state={eventFetchState}
-        error={eventFetchError}
-        eventCount={store.events.filter((event) => event.source === 'supabase').length}
-        venueNamesUnavailable={venueNamesUnavailable}
-      />
       <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <div className="mb-2 text-[10px] font-bold uppercase tracking-[.2em] text-[#a987a9]">Plan with confidence</div>

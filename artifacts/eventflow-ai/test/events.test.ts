@@ -134,19 +134,23 @@ test("Availability renders a confirmed live Event on its saved calendar date", (
     openModal: () => {},
     unblockSlot: () => {},
     eventFetchState: "loaded",
-    eventFetchError: "",
     allowLocalEventCreation: false,
   }));
   assert.match(markup, /Studio anniversary/);
   assert.match(markup, /Confirmed/);
   assert.match(markup, /data-testid="calendar-event-event-1"/);
   assert.match(markup, /disabled=""/);
-  assert.match(markup, /Live Events are read-only in Phase 3A/);
+  assert.doesNotMatch(markup, /Live Events are read-only in Phase 3A/);
+  assert.doesNotMatch(markup, /live Events loaded from Supabase/);
 });
 
 test("the portal reads Events through SELECT queries and keeps them out of local demo storage", () => {
   const portal = readFileSync(new URL("../src/business/BusinessPortal.tsx", import.meta.url), "utf8");
   const calendar = readFileSync(new URL("../src/business/calendar-management.tsx", import.meta.url), "utf8");
+  const dashboard = portal.slice(portal.indexOf("function Dashboard("), portal.indexOf("function Requests("));
+  assert.doesNotMatch(dashboard, /RequestFetchNotice/);
+  assert.match(portal.slice(portal.indexOf("function Requests("), portal.indexOf("function RequestDetail(")), /RequestFetchNotice/);
+  assert.doesNotMatch(calendar, /EventDataStatus|Phase 3A/);
   const readerSource = portal.slice(portal.indexOf("void readBusinessEvents"), portal.indexOf("}, [authLoading, staffUserId, remoteVersion]);", portal.indexOf("void readBusinessEvents")));
   assert.match(readerSource, /\.from\("events"\)\s*\.select\(/);
   assert.match(readerSource, /\.from\("proposals"\)\s*\.select\(/);
@@ -160,6 +164,8 @@ test("the portal reads Events through SELECT queries and keeps them out of local
   assert.match(portal, /disabled=\{e\.source === "supabase"\}/);
   assert.match(portal, /disabled\s+title="Supabase event creation will be available in Phase 3B\."/);
   assert.match(calendar, /disabled=\{!allowLocalEventCreation\}/);
+  assert.doesNotMatch(calendar, /Live Events are read-only in Phase 3A/);
+  assert.doesNotMatch(calendar, /EventDataStatus/);
   assert.match(portal, /\["All", "Confirmed", "Upcoming"/);
   assert.match(portal, /state=\{eventFetchState\}/);
   assert.match(portal, /localStorage\.setItem\(DB_KEY, JSON\.stringify\(store\)\)/);
