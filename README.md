@@ -25,7 +25,7 @@
 | Resource | Link |
 |---|---|
 | **GitHub Repository** | https://github.com/Joycemsan328/SDC_Hackathon.git |
-| **Replit Project** |- |
+| **Replit Project** | - |
 | **Live Demo** | https://drive.google.com/file/d/1Yh9t2PCvNx3yux0EqMu1KWfe2Omhc_FL/view?usp=drive_link |
 | **RunPod Endpoint** | POST https://api.runpod.ai/v2/v14dit7fdqpt7v/runsync \ |
 | **Slide Deck** | https://sg.docworkspace.com/d/sbQa3vWngAZ6nqFB_z4hmbox2rklizgpyf8?sa=601.1037 |
