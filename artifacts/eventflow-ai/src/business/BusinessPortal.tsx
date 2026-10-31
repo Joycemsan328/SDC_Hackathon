@@ -1793,7 +1793,7 @@ function Dashboard({ store, setLocation, openModal, requestFetchState, recentlyU
           tone="rose"
         />
         <Metric
-          label="Demo events"
+          label="Events"
           href="/events"
           value={
             store.events.filter(
